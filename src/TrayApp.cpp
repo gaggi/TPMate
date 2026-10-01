@@ -16,6 +16,7 @@
 
 namespace
 {
+    constexpr DWORD kMainWindowStyle = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
     constexpr UINT kTrayMessage = WM_APP + 1;
     constexpr UINT kConnectionChanged = WM_APP + 2;
     constexpr UINT kAppendLogs = WM_APP + 3;
@@ -23,6 +24,7 @@ namespace
     constexpr UINT kShowExistingWindow = WM_APP + 5;
     constexpr UINT kUpdateCheckFinished = WM_APP + 6;
     constexpr UINT kUpdateInstallFinished = WM_APP + 7;
+    constexpr UINT kTextureReloadKey = WM_APP + 8;
     constexpr int kReloadTexturesMessage = 7;
     constexpr UINT kMenuOpen = 1001;
     constexpr UINT kMenuClean = 1003;
@@ -136,6 +138,9 @@ TrayApp::TrayApp()
 
 int TrayApp::Run(HINSTANCE instance)
 {
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    dpi_ = GetDpiForSystem();
+    backgroundBrush_ = CreateSolidBrush(RGB(246, 247, 249));
     instance_ = instance;
     startWithWindows_ = StartupRegistration::IsEnabled();
     const auto settingsPath = SettingsPath();
@@ -167,40 +172,51 @@ int TrayApp::Run(HINSTANCE instance)
     wc.hIcon = LoadIconW(instance_, MAKEINTRESOURCEW(IDI_APPICON));
     wc.hIconSm = static_cast<HICON>(LoadImageW(instance_, MAKEINTRESOURCEW(IDI_APPICON), IMAGE_ICON,
         GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_SHARED));
-    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1); wc.lpszClassName = L"TPMateNativeWindow";
+    wc.hbrBackground = backgroundBrush_; wc.lpszClassName = L"TPMateNativeWindow";
     if (!RegisterClassExW(&wc)) return 1;
 
     const std::wstring title = L"TPMate " + UpdateChecker::CurrentVersion();
-    window_ = CreateWindowExW(0, wc.lpszClassName, title.c_str(), WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, CW_USEDEFAULT, 816, 673, nullptr, nullptr, instance_, this);
+    RECT initialRect{0, 0, MulDiv(880, dpi_, 96), MulDiv(640, dpi_, 96)};
+    AdjustWindowRectExForDpi(&initialRect, kMainWindowStyle, FALSE, 0, dpi_);
+    window_ = CreateWindowExW(0, wc.lpszClassName, title.c_str(), kMainWindowStyle,
+        CW_USEDEFAULT, CW_USEDEFAULT, initialRect.right - initialRect.left, initialRect.bottom - initialRect.top,
+        nullptr, nullptr, instance_, this);
     if (!window_) return 1;
     statusText_ = CreateWindowExW(0, L"STATIC", L"Waiting for iRacing...", WS_CHILD | WS_VISIBLE | SS_LEFT,
         12, 10, 770, 28, window_, nullptr, instance_, nullptr);
-    updateButton_ = CreateWindowExW(0, L"BUTTON", L"Check for updates", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+    updateButton_ = CreateWindowExW(0, L"BUTTON", L"Check for updates", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
         630, 8, 154, 28, window_, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kMenuUpdate)), instance_, nullptr);
-    logEdit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"RICHEDIT50W", L"", WS_CHILD | WS_VISIBLE | WS_VSCROLL |
+    paintsGroup_ = CreateWindowExW(0, L"BUTTON", L"Paints", WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
+        0, 0, 100, 100, window_, nullptr, instance_, nullptr);
+    behaviorGroup_ = CreateWindowExW(0, L"BUTTON", L"Behavior", WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
+        0, 0, 100, 100, window_, nullptr, instance_, nullptr);
+    downloadsGroup_ = CreateWindowExW(0, L"BUTTON", L"Downloads && logging", WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
+        0, 0, 100, 100, window_, nullptr, instance_, nullptr);
+    activityLabel_ = CreateWindowExW(0, L"STATIC", L"Activity", WS_CHILD | WS_VISIBLE,
+        0, 0, 100, 24, window_, nullptr, instance_, nullptr);
+    logEdit_ = CreateWindowExW(0, L"RICHEDIT50W", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | WS_VSCROLL |
         ES_LEFT | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY, 12, 44, 770, 510, window_, nullptr, instance_, nullptr);
-    minimizeCheck_ = CreateWindowExW(0, L"BUTTON", L"Close and minimize to the system tray", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+    minimizeCheck_ = CreateWindowExW(0, L"BUTTON", L"Close / minimize to tray", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
         12, 562, 360, 24, window_, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kSettingsMinimize)), instance_, nullptr);
-    deleteCheck_ = CreateWindowExW(0, L"BUTTON", L"Delete downloaded paints when iRacing exits", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+    deleteCheck_ = CreateWindowExW(0, L"BUTTON", L"Clean downloaded paints on iRacing exit", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
         390, 562, 390, 24, window_, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kSettingsDelete)), instance_, nullptr);
-    reloadCheck_ = CreateWindowExW(0, L"BUTTON", L"Re-download paints on iRacing texture reload (Ctrl+R)", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+    reloadCheck_ = CreateWindowExW(0, L"BUTTON", L"Re-download paints on Ctrl+R", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
         12, 590, 490, 24, window_, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kSettingsReload)), instance_, nullptr);
-    logLevelLabel_ = CreateWindowExW(0, L"STATIC", L"Log level:", WS_CHILD | WS_VISIBLE | SS_RIGHT,
+    logLevelLabel_ = CreateWindowExW(0, L"STATIC", L"Log level", WS_CHILD | WS_VISIBLE | SS_LEFT,
         536, 590, 82, 24, window_, nullptr, instance_, nullptr);
     logLevelCombo_ = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL,
         435, 586, 100, 180, window_, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kLogLevelCombo)), instance_, nullptr);
-    concurrencyLabel_ = CreateWindowExW(0, L"STATIC", L"Simultaneous paints:", WS_CHILD | WS_VISIBLE | SS_RIGHT,
+    concurrencyLabel_ = CreateWindowExW(0, L"STATIC", L"Parallel downloads", WS_CHILD | WS_VISIBLE | SS_LEFT,
         543, 590, 126, 24, window_, nullptr, instance_, nullptr);
     concurrencyCombo_ = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL,
         677, 586, 106, 180, window_, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kConcurrencyCombo)), instance_, nullptr);
     struct PaintCheck { const wchar_t* label; int id; HWND* handle; bool checked; };
     const PaintCheck paintChecks[] = {
-        {L"Load Cars", kLoadCars, &loadCarsCheck_, loadCars_},
-        {L"Load Helmets", kLoadHelmets, &loadHelmetsCheck_, loadHelmets_},
-        {L"Load Suits", kLoadSuits, &loadSuitsCheck_, loadSuits_},
+        {L"Cars", kLoadCars, &loadCarsCheck_, loadCars_},
         {L"Numbers", kLoadNumbers, &loadNumbersCheck_, loadNumbers_},
-        {L"Spec Maps", kLoadSpecMaps, &loadSpecMapsCheck_, loadSpecMaps_}
+        {L"Spec Maps", kLoadSpecMaps, &loadSpecMapsCheck_, loadSpecMaps_},
+        {L"Helmets", kLoadHelmets, &loadHelmetsCheck_, loadHelmets_},
+        {L"Suits", kLoadSuits, &loadSuitsCheck_, loadSuits_}
     };
     for (const auto& option : paintChecks)
     {
@@ -240,9 +256,7 @@ int TrayApp::Run(HINSTANCE instance)
     SendMessageW(logLevelCombo_, CB_SETCURSEL, selectedLevelIndex, 0);
     SendMessageW(logEdit_, EM_SETBKGNDCOLOR, 0, RGB(255, 255, 255));
     SendMessageW(logEdit_, EM_EXLIMITTEXT, 0, 1000000);
-    HFONT font = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
-    for (HWND control : {statusText_, updateButton_, logEdit_, minimizeCheck_, deleteCheck_, reloadCheck_, loadCarsCheck_, loadHelmetsCheck_, loadSuitsCheck_, loadNumbersCheck_, loadSpecMapsCheck_, startupCheck_, logLevelLabel_, logLevelCombo_, concurrencyLabel_, concurrencyCombo_})
-        SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+    UpdateFonts();
     RECT clientRect{};
     GetClientRect(window_, &clientRect);
     LayoutControls(clientRect.right, clientRect.bottom);
@@ -260,11 +274,15 @@ int TrayApp::Run(HINSTANCE instance)
 
     MSG message{};
     while (GetMessageW(&message, nullptr, 0, 0) > 0) { TranslateMessage(&message); DispatchMessageW(&message); }
+    if (reloadKeyboardHook_) UnhookWindowsHookEx(reloadKeyboardHook_);
+    reloadKeyboardHook_ = nullptr;
+    keyboardHookOwner_ = nullptr;
     if (updateThread_.joinable()) updateThread_.join();
     monitor_.Stop();
     downloader_.Stop();
     RemoveTrayIcon();
     if (richEditModule_) FreeLibrary(richEditModule_);
+    DeleteObject(uiFont_); DeleteObject(headingFont_); DeleteObject(logFont_); DeleteObject(backgroundBrush_);
     return static_cast<int>(message.wParam);
 }
 
@@ -285,7 +303,7 @@ LRESULT TrayApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
     {
         if (LOWORD(wParam) == kReloadTexturesMessage && autoRefreshOnReload_)
         {
-            PostLog(LogLevel::Info, "Detected an iRacing texture reload request (Ctrl+R).");
+            PostLog(LogLevel::Info, "Detected an iRacing SDK texture reload request.");
             downloader_.OnIRacingTextureReload();
         }
         return 0;
@@ -340,6 +358,7 @@ LRESULT TrayApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
             autoRefreshOnReload_ = SendMessageW(reloadCheck_, BM_GETCHECK, 0, 0) == BST_CHECKED;
             SaveSettings();
             downloader_.SetAutoRefreshOnReload(autoRefreshOnReload_);
+            UpdateReloadKeyboardHook();
             return 0;
         }
         if (LOWORD(wParam) == kLogLevelCombo && HIWORD(wParam) == CBN_SELCHANGE)
@@ -373,6 +392,13 @@ LRESULT TrayApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
     case kAppendLogs: AppendQueuedLogs(); return 0;
     case kUpdateCheckFinished: FinishUpdateCheck(); return 0;
     case kUpdateInstallFinished: FinishUpdateInstall(); return 0;
+    case kTextureReloadKey:
+        if (connected_ && autoRefreshOnReload_)
+        {
+            PostLog(LogLevel::Info, "Detected Ctrl+R in iRacing; requesting fresh session paints.");
+            downloader_.OnIRacingTextureReload();
+        }
+        return 0;
     case kSessionExited:
         downloader_.OnSimulatorExit();
         return 0;
@@ -380,10 +406,29 @@ LRESULT TrayApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
         if (wParam == SIZE_MINIMIZED && minimizeToTray_) ShowWindow(window_, SW_HIDE);
         else if (wParam != SIZE_MINIMIZED) LayoutControls(LOWORD(lParam), HIWORD(lParam));
         return 0;
+    case WM_GETMINMAXINFO:
+    {
+        RECT minimum{0, 0, MulDiv(880, dpi_, 96), MulDiv(640, dpi_, 96)};
+        AdjustWindowRectExForDpi(&minimum, kMainWindowStyle, FALSE, 0, dpi_);
+        auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
+        info->ptMinTrackSize = {minimum.right - minimum.left, minimum.bottom - minimum.top};
+        info->ptMaxTrackSize = info->ptMinTrackSize;
+        return 0;
+    }
+    case WM_DPICHANGED:
+    {
+        dpi_ = HIWORD(wParam);
+        UpdateFonts();
+        const auto* rect = reinterpret_cast<const RECT*>(lParam);
+        SetWindowPos(window_, nullptr, rect->left, rect->top, rect->right - rect->left, rect->bottom - rect->top,
+            SWP_NOZORDER | SWP_NOACTIVATE);
+        return 0;
+    }
     case WM_CTLCOLORSTATIC:
     case WM_CTLCOLORBTN:
         SetBkMode(reinterpret_cast<HDC>(wParam), TRANSPARENT);
-        return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_BTNFACE));
+        SetTextColor(reinterpret_cast<HDC>(wParam), RGB(40, 47, 58));
+        return reinterpret_cast<LRESULT>(backgroundBrush_);
     case WM_CTLCOLOREDIT:
         SetTextColor(reinterpret_cast<HDC>(wParam), RGB(0, 0, 0));
         SetBkColor(reinterpret_cast<HDC>(wParam), RGB(255, 255, 255));
@@ -391,7 +436,12 @@ LRESULT TrayApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
     case WM_CLOSE:
         if (minimizeToTray_) { ShowWindow(window_, SW_HIDE); return 0; }
         DestroyWindow(window_); return 0;
-    case WM_DESTROY: PostQuitMessage(0); return 0;
+    case WM_DESTROY:
+        if (reloadKeyboardHook_) UnhookWindowsHookEx(reloadKeyboardHook_);
+        reloadKeyboardHook_ = nullptr;
+        keyboardHookOwner_ = nullptr;
+        PostQuitMessage(0);
+        return 0;
     }
     return DefWindowProcW(window_, message, wParam, lParam);
 }
@@ -606,29 +656,137 @@ void TrayApp::AppendQueuedLogs()
 
 void TrayApp::LayoutControls(int width, int height)
 {
-    const int margin = 12;
-    MoveWindow(statusText_, margin, 10, width - 2 * margin - 166, 26, TRUE);
-    MoveWindow(updateButton_, width - margin - 154, 8, 154, 28, TRUE);
-    MoveWindow(logEdit_, margin, 42, width - 2 * margin, height - 162, TRUE);
-    MoveWindow(loadCarsCheck_, margin, height - 112, 95, 24, TRUE);
-    MoveWindow(loadNumbersCheck_, 112, height - 112, 90, 24, TRUE);
-    MoveWindow(loadSpecMapsCheck_, 210, height - 112, 105, 24, TRUE);
-    MoveWindow(loadHelmetsCheck_, 345, height - 112, 130, 24, TRUE);
-    MoveWindow(loadSuitsCheck_, 500, height - 112, 110, 24, TRUE);
-    MoveWindow(startupCheck_, 620, height - 112, 164, 24, TRUE);
-    MoveWindow(minimizeCheck_, margin, height - 78, 300, 24, TRUE);
-    MoveWindow(deleteCheck_, 320, height - 78, 370, 24, TRUE);
-    MoveWindow(reloadCheck_, margin, height - 43, 350, 24, TRUE);
-    MoveWindow(logLevelLabel_, 367, height - 43, 62, 24, TRUE);
-    MoveWindow(logLevelCombo_, 435, height - 47, 100, 180, TRUE);
-    MoveWindow(concurrencyLabel_, 543, height - 43, 126, 24, TRUE);
-    MoveWindow(concurrencyCombo_, 677, height - 47, 106, 180, TRUE);
+    const auto px = [this](int value) { return MulDiv(value, dpi_, 96); };
+    const int logicalWidth = MulDiv(width, 96, dpi_);
+    const int logicalHeight = MulDiv(height, 96, dpi_);
+    const int content = logicalWidth - 40;
+    const int settingsY = logicalHeight - 196;
+    const int paintsWidth = (content - 24) * 28 / 100;
+    const int behaviorWidth = (content - 24) * 42 / 100;
+    const int behaviorX = 20 + paintsWidth + 12;
+    const int downloadsX = behaviorX + behaviorWidth + 12;
+    const int downloadsWidth = logicalWidth - 20 - downloadsX;
+    const auto place = [&](HWND control, int x, int y, int w, int h)
+    { if (control) MoveWindow(control, px(x), px(y), px(w), px(h), TRUE); };
+
+    place(statusText_, 20, 26, content - 180, 24);
+    place(updateButton_, logicalWidth - 180, 18, 160, 32);
+    place(activityLabel_, 20, 66, content, 22);
+    place(logEdit_, 20, 92, content, settingsY - 108);
+    if (logEdit_)
+    {
+        RECT textRect{};
+        GetClientRect(logEdit_, &textRect);
+        textRect.left += px(10); textRect.top += px(8);
+        textRect.right -= px(10); textRect.bottom -= px(8);
+        SendMessageW(logEdit_, EM_SETRECT, 0, reinterpret_cast<LPARAM>(&textRect));
+    }
+    place(paintsGroup_, 20, settingsY, paintsWidth, 176);
+    place(behaviorGroup_, behaviorX, settingsY, behaviorWidth, 176);
+    place(downloadsGroup_, downloadsX, settingsY, downloadsWidth, 176);
+    const int paintX = 36;
+    place(loadCarsCheck_, paintX, settingsY + 30, paintsWidth - 32, 24);
+    place(loadNumbersCheck_, paintX + 16, settingsY + 56, paintsWidth - 48, 24);
+    place(loadSpecMapsCheck_, paintX + 16, settingsY + 82, paintsWidth - 48, 24);
+    place(loadHelmetsCheck_, paintX, settingsY + 112, paintsWidth - 32, 24);
+    place(loadSuitsCheck_, paintX, settingsY + 140, paintsWidth - 32, 24);
+    place(minimizeCheck_, behaviorX + 16, settingsY + 30, behaviorWidth - 32, 24);
+    place(startupCheck_, behaviorX + 16, settingsY + 60, behaviorWidth - 32, 24);
+    place(deleteCheck_, behaviorX + 16, settingsY + 90, behaviorWidth - 32, 24);
+    place(reloadCheck_, behaviorX + 16, settingsY + 120, behaviorWidth - 32, 24);
+    place(logLevelLabel_, downloadsX + 16, settingsY + 28, downloadsWidth - 32, 20);
+    place(logLevelCombo_, downloadsX + 16, settingsY + 50, downloadsWidth - 32, 180);
+    place(concurrencyLabel_, downloadsX + 16, settingsY + 96, downloadsWidth - 32, 20);
+    place(concurrencyCombo_, downloadsX + 16, settingsY + 118, downloadsWidth - 32, 240);
+}
+
+void TrayApp::UpdateFonts()
+{
+    const HFONT previousUi = uiFont_, previousHeading = headingFont_, previousLog = logFont_;
+    const auto create = [this](const wchar_t* name, int points, int weight)
+    { return CreateFontW(-MulDiv(points, dpi_, 72), 0, 0, 0, weight, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, name); };
+    uiFont_ = create(L"Segoe UI", 9, FW_NORMAL);
+    headingFont_ = create(L"Segoe UI", 10, FW_SEMIBOLD);
+    logFont_ = create(L"Consolas", 9, FW_NORMAL);
+    for (HWND control : {updateButton_, minimizeCheck_, deleteCheck_, reloadCheck_, loadCarsCheck_, loadHelmetsCheck_,
+        loadSuitsCheck_, loadNumbersCheck_, loadSpecMapsCheck_, startupCheck_, logLevelLabel_, logLevelCombo_,
+        concurrencyLabel_, concurrencyCombo_})
+        if (control) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont_), TRUE);
+    for (HWND control : {statusText_, activityLabel_, paintsGroup_, behaviorGroup_, downloadsGroup_})
+        if (control) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(headingFont_), TRUE);
+    if (logEdit_) SendMessageW(logEdit_, WM_SETFONT, reinterpret_cast<WPARAM>(logFont_), TRUE);
+    for (HWND control : {logLevelCombo_, concurrencyCombo_})
+    {
+        if (!control) continue;
+        SendMessageW(control, CB_SETITEMHEIGHT, static_cast<WPARAM>(-1), MulDiv(22, dpi_, 96));
+        SendMessageW(control, CB_SETITEMHEIGHT, 0, MulDiv(22, dpi_, 96));
+    }
+    DeleteObject(previousUi); DeleteObject(previousHeading); DeleteObject(previousLog);
 }
 
 void TrayApp::UpdateConnection(bool connected)
 {
     connected_ = connected;
+    UpdateReloadKeyboardHook();
     SetWindowTextW(statusText_, connected_ ? L"Connected to iRacing." : L"Waiting for iRacing...");
     wcscpy_s(iconData_.szTip, connected_ ? L"TPMate - Connected to iRacing" : L"TPMate - Waiting for iRacing");
     iconData_.uFlags = NIF_TIP | NIF_SHOWTIP; Shell_NotifyIconW(NIM_MODIFY, &iconData_);
+}
+
+void TrayApp::UpdateReloadKeyboardHook()
+{
+    const bool wanted = connected_ && autoRefreshOnReload_;
+    if (wanted && !reloadKeyboardHook_)
+    {
+        reloadShortcut_.Reset();
+        keyboardHookOwner_ = this;
+        reloadKeyboardHook_ = SetWindowsHookExW(WH_KEYBOARD_LL, KeyboardProc, instance_, 0);
+        if (!reloadKeyboardHook_)
+        {
+            keyboardHookOwner_ = nullptr;
+            PostLog(LogLevel::Warning, "Could not enable Ctrl+R detection (Windows error " + std::to_string(GetLastError()) + ").");
+        }
+    }
+    else if (!wanted && reloadKeyboardHook_)
+    {
+        UnhookWindowsHookEx(reloadKeyboardHook_);
+        reloadKeyboardHook_ = nullptr;
+        keyboardHookOwner_ = nullptr;
+        reloadShortcut_.Reset();
+    }
+}
+
+LRESULT CALLBACK TrayApp::KeyboardProc(int code, WPARAM wParam, LPARAM lParam)
+{
+    auto* self = keyboardHookOwner_;
+    if (code == HC_ACTION && self)
+    {
+        const auto* key = reinterpret_cast<const KBDLLHOOKSTRUCT*>(lParam);
+        if (key->vkCode == 'R' && self->reloadShortcut_.OnKey(key->vkCode, wParam,
+            (key->flags & LLKHF_INJECTED) != 0,
+            (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0,
+            (GetAsyncKeyState(VK_MENU) & 0x8000) != 0,
+            (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0))
+        {
+            DWORD processId = 0;
+            GetWindowThreadProcessId(GetForegroundWindow(), &processId);
+            HANDLE process = processId ? OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId) : nullptr;
+            if (process)
+            {
+                wchar_t path[32768]{};
+                DWORD length = static_cast<DWORD>(std::size(path));
+                if (QueryFullProcessImageNameW(process, 0, path, &length))
+                {
+                    const wchar_t* name = wcsrchr(path, L'\\');
+                    name = name ? name + 1 : path;
+                    if (ReloadShortcut::IsSimulator(name))
+                        PostMessageW(self->window_, kTextureReloadKey, 0, 0);
+                }
+                CloseHandle(process);
+            }
+        }
+    }
+    // Observe the shortcut; never consume it or change iRacing's key handling.
+    return CallNextHookEx(nullptr, code, wParam, lParam);
 }
