@@ -1,9 +1,12 @@
 #include "TrayApp.h"
+#include "StartupRegistration.h"
 
 #include <windows.h>
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 {
+    const int helperResult = StartupRegistration::HandleCommandLine();
+    if (helperResult >= 0) return helperResult;
     HANDLE singleInstance = CreateMutexW(nullptr, FALSE, L"Local\\TPMate.SingleInstance");
     if (!singleInstance)
         return 1;

@@ -8,6 +8,7 @@ A small native Windows tray application for iRacing Trading Paints. TPMate is wr
 - Main window shows iRacing connection status, logs, and settings
 - Only one instance runs per Windows session; starting either executable again opens the existing window
 - Select Cars, Helmets, and Suits independently, with Numbers and Spec Maps options for Cars
+- Start with Windows creates a per-user logon task; changing this option prompts for UAC once, while subsequent logons start TPMate in the tray with normal user privileges
 - Settings are saved in `%APPDATA%\TPMate\settings.ini`
 - Closing or minimizing the window hides it in the tray by default
 - The tray tooltip reflects the iRacing connection status

@@ -43,6 +43,7 @@ private:
     HWND loadSuitsCheck_ = nullptr;
     HWND loadNumbersCheck_ = nullptr;
     HWND loadSpecMapsCheck_ = nullptr;
+    HWND startupCheck_ = nullptr;
     HWND logLevelLabel_ = nullptr;
     HWND logLevelCombo_ = nullptr;
     HWND concurrencyLabel_ = nullptr;
@@ -59,6 +60,7 @@ private:
     bool loadSuits_ = true;
     bool loadNumbers_ = true;
     bool loadSpecMaps_ = true;
+    bool startWithWindows_ = false;
     unsigned int maxConcurrentDownloads_ = 5;
     std::atomic<LogLevel> minimumLogLevel_{LogLevel::Info};
     NOTIFYICONDATAW iconData_{};

@@ -18,6 +18,7 @@ target_include_directories(bzip2 PUBLIC third_party/bzip2)
 
 add_executable(TPMate WIN32
     src/main.cpp
+    src/StartupRegistration.cpp
     src/TrayApp.cpp
     src/IRacingMonitor.cpp
     src/SessionInfo.cpp
@@ -28,7 +29,7 @@ add_executable(TPMate WIN32
 
 target_include_directories(TPMate PRIVATE src)
 target_compile_definitions(TPMate PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
-target_link_libraries(TPMate PRIVATE shell32 winhttp xmllite ole32 bzip2)
+target_link_libraries(TPMate PRIVATE shell32 winhttp xmllite ole32 oleaut32 advapi32 taskschd bzip2)
 
 if(MSVC)
     set_property(TARGET bzip2 PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")

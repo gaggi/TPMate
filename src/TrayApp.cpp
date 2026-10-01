@@ -1,4 +1,5 @@
 #include "TrayApp.h"
+#include "StartupRegistration.h"
 
 #include <shellapi.h>
 #include <shlobj.h>
@@ -32,6 +33,7 @@ namespace
     constexpr int kLoadSuits = 2012;
     constexpr int kLoadNumbers = 2013;
     constexpr int kLoadSpecMaps = 2014;
+    constexpr int kStartWithWindows = 2015;
 
     std::wstring ConfigDirectory()
     {
@@ -130,6 +132,7 @@ TrayApp::TrayApp()
 int TrayApp::Run(HINSTANCE instance)
 {
     instance_ = instance;
+    startWithWindows_ = StartupRegistration::IsEnabled();
     const auto settingsPath = SettingsPath();
     minimizeToTray_ = GetPrivateProfileIntW(L"Settings", L"MinimizeToTray", 1, settingsPath.c_str()) != 0;
     deleteAfterSession_ = GetPrivateProfileIntW(L"Settings", L"DeleteAfterSession", 1, settingsPath.c_str()) != 0;
@@ -192,6 +195,10 @@ int TrayApp::Run(HINSTANCE instance)
     }
     EnableWindow(loadNumbersCheck_, loadCars_);
     EnableWindow(loadSpecMapsCheck_, loadCars_);
+    startupCheck_ = CreateWindowExW(0, L"BUTTON", L"Start with Windows",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 620, 0, 164, 24,
+        window_, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kStartWithWindows)), instance_, nullptr);
+    SendMessageW(startupCheck_, BM_SETCHECK, startWithWindows_ ? BST_CHECKED : BST_UNCHECKED, 0);
     const std::pair<const wchar_t*, LogLevel> levels[] = {
         {L"Error", LogLevel::Error}, {L"Warning", LogLevel::Warning},
         {L"Info", LogLevel::Info}, {L"Verbose", LogLevel::Verbose}
@@ -218,7 +225,7 @@ int TrayApp::Run(HINSTANCE instance)
     SendMessageW(logEdit_, EM_SETBKGNDCOLOR, 0, RGB(255, 255, 255));
     SendMessageW(logEdit_, EM_EXLIMITTEXT, 0, 1000000);
     HFONT font = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
-    for (HWND control : {statusText_, logEdit_, minimizeCheck_, deleteCheck_, reloadCheck_, loadCarsCheck_, loadHelmetsCheck_, loadSuitsCheck_, loadNumbersCheck_, loadSpecMapsCheck_, logLevelLabel_, logLevelCombo_, concurrencyLabel_, concurrencyCombo_})
+    for (HWND control : {statusText_, logEdit_, minimizeCheck_, deleteCheck_, reloadCheck_, loadCarsCheck_, loadHelmetsCheck_, loadSuitsCheck_, loadNumbersCheck_, loadSpecMapsCheck_, startupCheck_, logLevelLabel_, logLevelCombo_, concurrencyLabel_, concurrencyCombo_})
         SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
     RECT clientRect{};
     GetClientRect(window_, &clientRect);
@@ -276,6 +283,24 @@ LRESULT TrayApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
         }
         switch (LOWORD(wParam))
         {
+        case kStartWithWindows:
+        {
+            const bool requested = SendMessageW(startupCheck_, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            if (StartupRegistration::Apply(window_, requested))
+            {
+                startWithWindows_ = requested;
+                PostLog(LogLevel::Info, requested ? "Windows startup enabled." : "Windows startup disabled.");
+            }
+            else
+            {
+                const bool cancelled = GetLastError() == ERROR_CANCELLED;
+                SendMessageW(startupCheck_, BM_SETCHECK, startWithWindows_ ? BST_CHECKED : BST_UNCHECKED, 0);
+                if (!cancelled)
+                    MessageBoxW(window_, L"Windows startup could not be changed. The previous setting was kept.",
+                        L"TPMate", MB_OK | MB_ICONERROR);
+            }
+            return 0;
+        }
         case kLoadCars:
         case kLoadHelmets:
         case kLoadSuits:
@@ -464,6 +489,7 @@ void TrayApp::LayoutControls(int width, int height)
     MoveWindow(loadSpecMapsCheck_, 210, height - 112, 105, 24, TRUE);
     MoveWindow(loadHelmetsCheck_, 345, height - 112, 130, 24, TRUE);
     MoveWindow(loadSuitsCheck_, 500, height - 112, 110, 24, TRUE);
+    MoveWindow(startupCheck_, 620, height - 112, 164, 24, TRUE);
     MoveWindow(minimizeCheck_, margin, height - 78, 300, 24, TRUE);
     MoveWindow(deleteCheck_, 320, height - 78, 370, 24, TRUE);
     MoveWindow(reloadCheck_, margin, height - 43, 350, 24, TRUE);
