@@ -1,0 +1,11 @@
+/build/
+/build-next/
+/build-*/
+/.tools/
+/.vs/
+/out/
+CMakeUserPresets.json
+*.user
+*.suo
+*.log
+*.tmp
