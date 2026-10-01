@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(TPMate LANGUAGES C CXX)
+project(TPMate VERSION 0.1.0 LANGUAGES C CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -17,7 +17,10 @@ add_library(bzip2 STATIC
 target_include_directories(bzip2 PUBLIC third_party/bzip2)
 
 add_executable(TPMate WIN32
+    resources/resources.rc
     src/main.cpp
+    src/JsonLite.cpp
+    src/UpdateChecker.cpp
     src/StartupRegistration.cpp
     src/TrayApp.cpp
     src/IRacingMonitor.cpp
@@ -29,9 +32,19 @@ add_executable(TPMate WIN32
 
 target_include_directories(TPMate PRIVATE src)
 target_compile_definitions(TPMate PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
-target_link_libraries(TPMate PRIVATE shell32 winhttp xmllite ole32 oleaut32 advapi32 taskschd bzip2)
+target_compile_definitions(TPMate PRIVATE TPMATE_VERSION="${PROJECT_VERSION}")
+target_link_libraries(TPMate PRIVATE comctl32 shell32 winhttp xmllite ole32 oleaut32 advapi32 taskschd bzip2)
+
+add_executable(TPMateUpdateTests EXCLUDE_FROM_ALL tests/UpdateCheckerTests.cpp src/JsonLite.cpp)
+target_include_directories(TPMateUpdateTests PRIVATE src)
+target_compile_definitions(TPMateUpdateTests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN TPMATE_VERSION="${PROJECT_VERSION}")
+target_link_libraries(TPMateUpdateTests PRIVATE shell32 winhttp)
 
 if(MSVC)
+    target_compile_options(TPMate PRIVATE /EHsc)
+    target_compile_options(TPMateUpdateTests PRIVATE /EHsc)
+    set_property(TARGET TPMateUpdateTests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    target_link_options(TPMate PRIVATE "/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'")
     set_property(TARGET bzip2 PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     set_property(TARGET TPMate PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     target_compile_options(TPMate PRIVATE $<$<CONFIG:Release>:/O2 /Oi /Gy /GF /Gw>)

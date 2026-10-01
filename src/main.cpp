@@ -1,10 +1,13 @@
 #include "TrayApp.h"
 #include "StartupRegistration.h"
+#include "UpdateChecker.h"
 
 #include <windows.h>
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 {
+    const int updateResult = UpdateChecker::HandleSelfUpdateCommandLine();
+    if (updateResult >= 0) return updateResult;
     const int helperResult = StartupRegistration::HandleCommandLine();
     if (helperResult >= 0) return helperResult;
     HANDLE singleInstance = CreateMutexW(nullptr, FALSE, L"Local\\TPMate.SingleInstance");

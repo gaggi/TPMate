@@ -3,6 +3,7 @@
 #include "AppLog.h"
 #include "IRacingMonitor.h"
 #include "PaintDownloader.h"
+#include "UpdateChecker.h"
 
 #include <windows.h>
 #include <shellapi.h>
@@ -10,6 +11,7 @@
 #include <atomic>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 class TrayApp final
@@ -31,9 +33,14 @@ private:
     void AppendQueuedLogs();
     void LayoutControls(int width, int height);
     void UpdateConnection(bool connected);
+    void StartUpdateCheck();
+    void FinishUpdateCheck();
+    void StartUpdateInstall(UpdateReleaseInfo release);
+    void FinishUpdateInstall();
 
     HWND window_ = nullptr;
     HWND statusText_ = nullptr;
+    HWND updateButton_ = nullptr;
     HWND logEdit_ = nullptr;
     HWND minimizeCheck_ = nullptr;
     HWND deleteCheck_ = nullptr;
@@ -68,4 +75,9 @@ private:
     std::vector<std::wstring> pendingLogs_;
     IRacingMonitor monitor_;
     PaintDownloader downloader_;
+    std::thread updateThread_;
+    bool updateBusy_ = false;
+    UpdateCheckResult updateResult_;
+    std::filesystem::path downloadedUpdate_;
+    std::wstring updateError_;
 };

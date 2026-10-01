@@ -1,9 +1,11 @@
 #include "TrayApp.h"
 #include "StartupRegistration.h"
+#include "Resource.h"
 
 #include <shellapi.h>
 #include <shlobj.h>
 #include <richedit.h>
+#include <commctrl.h>
 
 #include <algorithm>
 #include <cwctype>
@@ -19,9 +21,12 @@ namespace
     constexpr UINT kAppendLogs = WM_APP + 3;
     constexpr UINT kSessionExited = WM_APP + 4;
     constexpr UINT kShowExistingWindow = WM_APP + 5;
+    constexpr UINT kUpdateCheckFinished = WM_APP + 6;
+    constexpr UINT kUpdateInstallFinished = WM_APP + 7;
     constexpr int kReloadTexturesMessage = 7;
     constexpr UINT kMenuOpen = 1001;
     constexpr UINT kMenuClean = 1003;
+    constexpr UINT kMenuUpdate = 1005;
     constexpr UINT kMenuExit = 1004;
     constexpr int kSettingsMinimize = 2001;
     constexpr int kSettingsDelete = 2002;
@@ -148,20 +153,31 @@ int TrayApp::Run(HINSTANCE instance)
     if (savedLevel < LogLevelValue(LogLevel::Verbose) || savedLevel > LogLevelValue(LogLevel::Error))
         savedLevel = LogLevelValue(LogLevel::Info);
     minimumLogLevel_ = static_cast<LogLevel>(savedLevel);
+    if (SetPriorityClass(GetCurrentProcess(), IDLE_PRIORITY_CLASS))
+        PostLog(LogLevel::Info, "TPMate CPU priority: Low.");
+    else
+        PostLog(LogLevel::Warning, "Could not set TPMate CPU priority to Low (Windows error " +
+            std::to_string(GetLastError()) + ").");
     richEditModule_ = LoadLibraryW(L"Msftedit.dll");
     if (!richEditModule_)
         return 1;
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc); wc.lpfnWndProc = WindowProc; wc.hInstance = instance_;
-    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW); wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    wc.hIcon = LoadIconW(instance_, MAKEINTRESOURCEW(IDI_APPICON));
+    wc.hIconSm = static_cast<HICON>(LoadImageW(instance_, MAKEINTRESOURCEW(IDI_APPICON), IMAGE_ICON,
+        GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_SHARED));
     wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1); wc.lpszClassName = L"TPMateNativeWindow";
     if (!RegisterClassExW(&wc)) return 1;
 
-    window_ = CreateWindowExW(0, wc.lpszClassName, L"TPMate", WS_OVERLAPPEDWINDOW,
+    const std::wstring title = L"TPMate " + UpdateChecker::CurrentVersion();
+    window_ = CreateWindowExW(0, wc.lpszClassName, title.c_str(), WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT, 816, 673, nullptr, nullptr, instance_, this);
     if (!window_) return 1;
     statusText_ = CreateWindowExW(0, L"STATIC", L"Waiting for iRacing...", WS_CHILD | WS_VISIBLE | SS_LEFT,
         12, 10, 770, 28, window_, nullptr, instance_, nullptr);
+    updateButton_ = CreateWindowExW(0, L"BUTTON", L"Check for updates", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        630, 8, 154, 28, window_, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kMenuUpdate)), instance_, nullptr);
     logEdit_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"RICHEDIT50W", L"", WS_CHILD | WS_VISIBLE | WS_VSCROLL |
         ES_LEFT | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY, 12, 44, 770, 510, window_, nullptr, instance_, nullptr);
     minimizeCheck_ = CreateWindowExW(0, L"BUTTON", L"Close and minimize to the system tray", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
@@ -225,7 +241,7 @@ int TrayApp::Run(HINSTANCE instance)
     SendMessageW(logEdit_, EM_SETBKGNDCOLOR, 0, RGB(255, 255, 255));
     SendMessageW(logEdit_, EM_EXLIMITTEXT, 0, 1000000);
     HFONT font = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
-    for (HWND control : {statusText_, logEdit_, minimizeCheck_, deleteCheck_, reloadCheck_, loadCarsCheck_, loadHelmetsCheck_, loadSuitsCheck_, loadNumbersCheck_, loadSpecMapsCheck_, startupCheck_, logLevelLabel_, logLevelCombo_, concurrencyLabel_, concurrencyCombo_})
+    for (HWND control : {statusText_, updateButton_, logEdit_, minimizeCheck_, deleteCheck_, reloadCheck_, loadCarsCheck_, loadHelmetsCheck_, loadSuitsCheck_, loadNumbersCheck_, loadSpecMapsCheck_, startupCheck_, logLevelLabel_, logLevelCombo_, concurrencyLabel_, concurrencyCombo_})
         SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
     RECT clientRect{};
     GetClientRect(window_, &clientRect);
@@ -244,6 +260,7 @@ int TrayApp::Run(HINSTANCE instance)
 
     MSG message{};
     while (GetMessageW(&message, nullptr, 0, 0) > 0) { TranslateMessage(&message); DispatchMessageW(&message); }
+    if (updateThread_.joinable()) updateThread_.join();
     monitor_.Stop();
     downloader_.Stop();
     RemoveTrayIcon();
@@ -309,6 +326,7 @@ LRESULT TrayApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
             ApplyPaintOptions();
             return 0;
         case kMenuOpen: ShowStatusWindow(); return 0;
+        case kMenuUpdate: StartUpdateCheck(); return 0;
         case kMenuClean: CleanIRacingPaints(window_, downloader_); return 0;
         case kMenuExit: DestroyWindow(window_); return 0;
         case kSettingsMinimize: minimizeToTray_ = SendMessageW(minimizeCheck_, BM_GETCHECK, 0, 0) == BST_CHECKED; SaveSettings(); return 0;
@@ -353,6 +371,8 @@ LRESULT TrayApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
     case kShowExistingWindow: ShowStatusWindow(); return 0;
     case kConnectionChanged: UpdateConnection(wParam != 0); return 0;
     case kAppendLogs: AppendQueuedLogs(); return 0;
+    case kUpdateCheckFinished: FinishUpdateCheck(); return 0;
+    case kUpdateInstallFinished: FinishUpdateInstall(); return 0;
     case kSessionExited:
         downloader_.OnSimulatorExit();
         return 0;
@@ -380,7 +400,9 @@ void TrayApp::AddTrayIcon()
 {
     iconData_ = {}; iconData_.cbSize = sizeof(iconData_); iconData_.hWnd = window_; iconData_.uID = 1;
     iconData_.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP; iconData_.uCallbackMessage = kTrayMessage;
-    iconData_.hIcon = LoadIconW(nullptr, IDI_APPLICATION); wcscpy_s(iconData_.szTip, L"TPMate - Waiting for iRacing");
+    iconData_.hIcon = static_cast<HICON>(LoadImageW(instance_, MAKEINTRESOURCEW(IDI_APPICON), IMAGE_ICON,
+        GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_SHARED));
+    wcscpy_s(iconData_.szTip, L"TPMate - Waiting for iRacing");
     Shell_NotifyIconW(NIM_ADD, &iconData_); iconData_.uVersion = NOTIFYICON_VERSION_4; Shell_NotifyIconW(NIM_SETVERSION, &iconData_);
 }
 void TrayApp::RemoveTrayIcon() { Shell_NotifyIconW(NIM_DELETE, &iconData_); }
@@ -390,6 +412,7 @@ void TrayApp::ShowMenu()
     HMENU menu = CreatePopupMenu(); if (!menu) return;
     AppendMenuW(menu, MF_STRING, kMenuOpen, L"Open");
     AppendMenuW(menu, MF_STRING, kMenuClean, L"Clean iRacing Paints Folder...");
+    AppendMenuW(menu, MF_STRING | (updateBusy_ ? MF_GRAYED : 0), kMenuUpdate, L"Check for updates...");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr); AppendMenuW(menu, MF_STRING, kMenuExit, L"Exit");
     POINT point{}; GetCursorPos(&point); SetForegroundWindow(window_);
     const UINT command = static_cast<UINT>(TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD, point.x, point.y, 0, window_, nullptr));
@@ -400,6 +423,104 @@ void TrayApp::ShowMenu()
 void TrayApp::ShowStatusWindow()
 {
     ShowWindow(window_, SW_RESTORE); SetForegroundWindow(window_);
+    SendMessageW(logEdit_, EM_SCROLLCARET, 0, 0);
+    SendMessageW(logEdit_, WM_VSCROLL, SB_BOTTOM, 0);
+}
+
+void TrayApp::StartUpdateCheck()
+{
+    if (updateBusy_) return;
+    if (updateThread_.joinable()) updateThread_.join();
+    updateBusy_ = true;
+    EnableWindow(updateButton_, FALSE);
+    SetWindowTextW(updateButton_, L"Checking...");
+    PostLog(LogLevel::Info, "Running manual GitHub release check for TPMate updates.");
+    const HWND owner = window_;
+    updateThread_ = std::thread([this, owner]()
+    {
+        try { updateResult_ = UpdateChecker::CheckForUpdate(); }
+        catch (...) { updateResult_ = {}; updateResult_.message = L"The update check failed unexpectedly."; }
+        PostMessageW(owner, kUpdateCheckFinished, 0, 0);
+    });
+}
+
+void TrayApp::FinishUpdateCheck()
+{
+    if (updateThread_.joinable()) updateThread_.join();
+    updateBusy_ = false;
+    EnableWindow(updateButton_, TRUE);
+    SetWindowTextW(updateButton_, L"Check for updates");
+    const auto& result = updateResult_;
+    if (result.state == UpdateCheckState::Failed)
+    {
+        const std::wstring message = L"Current version: " + UpdateChecker::CurrentVersion() + L"\n\n" + result.message;
+        MessageBoxW(window_, message.c_str(), L"TPMate Update", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    const bool available = result.state == UpdateCheckState::UpdateAvailable;
+    const std::wstring details = L"Current version: " + UpdateChecker::CurrentVersion() +
+        L"\nGitHub version: " + (result.release.versionDisplay.empty() ? L"No published release" : result.release.versionDisplay) +
+        (available ? L"\n\nA newer version is available." : L"\n\n" + result.message);
+    TASKDIALOG_BUTTON buttons[2]{};
+    unsigned count = 0;
+    const bool canInstall = available && !result.release.assetDownloadUrl.empty();
+    if (canInstall) buttons[count++] = {101, L"Install update\nDownload and restart TPMate"};
+    if (!result.release.releasePageUrl.empty()) buttons[count++] = {102, L"Open GitHub release"};
+    TASKDIALOGCONFIG dialog{sizeof(dialog)};
+    dialog.hwndParent = window_;
+    dialog.dwFlags = TDF_USE_COMMAND_LINKS | TDF_ALLOW_DIALOG_CANCELLATION | TDF_SIZE_TO_CONTENT;
+    dialog.dwCommonButtons = TDCBF_CLOSE_BUTTON;
+    dialog.pszWindowTitle = L"TPMate Update";
+    dialog.pszMainInstruction = available ? L"Update available" : L"No update available";
+    dialog.pszContent = details.c_str();
+    dialog.cButtons = count;
+    dialog.pButtons = buttons;
+    dialog.nDefaultButton = IDCLOSE;
+    int selected = IDCLOSE;
+    if (FAILED(TaskDialogIndirect(&dialog, &selected, nullptr, nullptr)))
+    {
+        MessageBoxW(window_, details.c_str(), L"TPMate Update", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    if (selected == 101) StartUpdateInstall(result.release);
+    else if (selected == 102 && !UpdateChecker::OpenReleasePage(result.release.releasePageUrl))
+        MessageBoxW(window_, L"Could not open the GitHub release page.", L"TPMate Update", MB_OK | MB_ICONWARNING);
+}
+
+void TrayApp::StartUpdateInstall(UpdateReleaseInfo release)
+{
+    if (updateBusy_) return;
+    updateBusy_ = true;
+    EnableWindow(updateButton_, FALSE);
+    SetWindowTextW(updateButton_, L"Downloading...");
+    PostLog(LogLevel::Info, "Downloading TPMate update. The application will restart after installation.");
+    const HWND owner = window_;
+    updateThread_ = std::thread([this, owner, release = std::move(release)]()
+    {
+        updateError_.clear();
+        try
+        {
+            if (!UpdateChecker::DownloadReleaseAsset(release, downloadedUpdate_, updateError_) && updateError_.empty())
+                updateError_ = L"Could not download the update.";
+        }
+        catch (...) { updateError_ = L"Could not prepare the downloaded update."; }
+        PostMessageW(owner, kUpdateInstallFinished, 0, 0);
+    });
+}
+
+void TrayApp::FinishUpdateInstall()
+{
+    if (updateThread_.joinable()) updateThread_.join();
+    updateBusy_ = false;
+    EnableWindow(updateButton_, TRUE);
+    SetWindowTextW(updateButton_, L"Check for updates");
+    if (updateError_.empty() && UpdateChecker::LaunchSelfUpdater(downloadedUpdate_, GetCurrentProcessId(), updateError_))
+    {
+        SaveSettings();
+        DestroyWindow(window_);
+        return;
+    }
+    MessageBoxW(window_, updateError_.c_str(), L"TPMate Update", MB_OK | MB_ICONERROR);
 }
 
 void TrayApp::SaveSettings()
@@ -474,15 +595,20 @@ void TrayApp::AppendQueuedLogs()
     SendMessageW(logEdit_, EM_REPLACESEL, FALSE, reinterpret_cast<LPARAM>(combined.c_str()));
     const LONG newEnd = GetWindowTextLengthW(logEdit_);
     SendMessageW(logEdit_, EM_SETSEL, newEnd, newEnd);
-    SendMessageW(logEdit_, EM_SCROLLCARET, 0, 0);
-    SendMessageW(logEdit_, WM_VSCROLL, SB_BOTTOM, 0);
-    RedrawWindow(logEdit_, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+    if (IsWindowVisible(window_))
+    {
+        SendMessageW(logEdit_, EM_SCROLLCARET, 0, 0);
+        SendMessageW(logEdit_, WM_VSCROLL, SB_BOTTOM, 0);
+        // Let Windows combine paints instead of repainting synchronously for every log batch.
+        InvalidateRect(logEdit_, nullptr, FALSE);
+    }
 }
 
 void TrayApp::LayoutControls(int width, int height)
 {
     const int margin = 12;
-    MoveWindow(statusText_, margin, 10, width - 2 * margin, 26, TRUE);
+    MoveWindow(statusText_, margin, 10, width - 2 * margin - 166, 26, TRUE);
+    MoveWindow(updateButton_, width - margin - 154, 8, 154, 28, TRUE);
     MoveWindow(logEdit_, margin, 42, width - 2 * margin, height - 162, TRUE);
     MoveWindow(loadCarsCheck_, margin, height - 112, 95, 24, TRUE);
     MoveWindow(loadNumbersCheck_, 112, height - 112, 90, 24, TRUE);
