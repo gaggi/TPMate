@@ -23,8 +23,8 @@ public:
 
 private:
     static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam);
-    static LRESULT CALLBACK KeyboardProc(int code, WPARAM wParam, LPARAM lParam);
-    void UpdateReloadKeyboardHook();
+    void UpdateReloadShortcutListener();
+    void OnRawKeyboardInput(HRAWINPUT input);
     LRESULT HandleMessage(UINT message, WPARAM wParam, LPARAM lParam);
     void AddTrayIcon();
     void RemoveTrayIcon();
@@ -71,9 +71,8 @@ private:
     HFONT headingFont_ = nullptr;
     HFONT logFont_ = nullptr;
     HBRUSH backgroundBrush_ = nullptr;
-    HHOOK reloadKeyboardHook_ = nullptr;
+    bool reloadShortcutListening_ = false;
     ReloadShortcut reloadShortcut_;
-    inline static TrayApp* keyboardHookOwner_ = nullptr;
     UINT iracingBroadcastMessage_ = 0;
     bool connected_ = false;
     bool minimizeToTray_ = true;

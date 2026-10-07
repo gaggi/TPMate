@@ -6,9 +6,7 @@
 #include <algorithm>
 #include <cwctype>
 #include <filesystem>
-#include <fstream>
 #include <memory>
-#include <sstream>
 #include <vector>
 #include <limits>
 #include <windows.h>
@@ -312,8 +310,8 @@ namespace
             return false;
         }
 
-        std::ofstream stream(outputPath, std::ios::binary | std::ios::trunc);
-        if (!stream)
+        HANDLE file = CreateFileW(outputPath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file == INVALID_HANDLE_VALUE)
         {
             errorMessage = L"Could not create the temporary update file.";
             return false;
@@ -331,8 +329,8 @@ namespace
 
             if (availableBytes == 0)
             {
-                stream.close();
-                if (stream.good()) return true;
+                if (CloseHandle(file)) return true;
+                file = INVALID_HANDLE_VALUE;
                 errorMessage = L"Could not finalize the temporary update file.";
                 break;
             }
@@ -345,15 +343,15 @@ namespace
                 break;
             }
 
-            stream.write(buffer.data(), static_cast<std::streamsize>(downloadedBytes));
-            if (!stream.good())
+            DWORD writtenBytes = 0;
+            if (!WriteFile(file, buffer.data(), downloadedBytes, &writtenBytes, nullptr) || writtenBytes != downloadedBytes)
             {
                 errorMessage = L"Could not write the temporary update file.";
                 break;
             }
         }
 
-        stream.close();
+        if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
         std::error_code removeError;
         std::filesystem::remove(outputPath, removeError);
         return false;
@@ -478,6 +476,21 @@ bool UpdateChecker::DownloadReleaseAsset(const UpdateReleaseInfo& release, std::
         std::error_code removeError;
         std::filesystem::remove(downloadedPath, removeError);
         errorMessage = L"GitHub returned HTTP " + std::to_wstring(statusCode) + L" while downloading the update.";
+        return false;
+    }
+
+    // Never hand anything but a Windows executable to the self-updater.
+    char signature[2]{};
+    DWORD read = 0;
+    HANDLE file = CreateFileW(downloadedPath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    const bool executable = file != INVALID_HANDLE_VALUE && ReadFile(file, signature, sizeof(signature), &read, nullptr) &&
+        read == sizeof(signature) && signature[0] == 'M' && signature[1] == 'Z';
+    if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+    if (!executable)
+    {
+        std::error_code removeError;
+        std::filesystem::remove(downloadedPath, removeError);
+        errorMessage = L"The downloaded update is not a valid Windows executable.";
         return false;
     }
 

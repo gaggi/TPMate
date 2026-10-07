@@ -1,12 +1,7 @@
 #include "JsonLite.h"
 
-#include <cctype>
 #include <charconv>
 #include <cmath>
-#include <iomanip>
-#include <limits>
-#include <locale>
-#include <sstream>
 #include <stdexcept>
 
 namespace jsonlite
@@ -14,13 +9,9 @@ namespace jsonlite
     bool Value::IsObject() const { return std::holds_alternative<Object>(data); }
     bool Value::IsArray() const { return std::holds_alternative<Array>(data); }
     bool Value::IsString() const { return std::holds_alternative<std::string>(data); }
-    bool Value::IsBool() const { return std::holds_alternative<bool>(data); }
-    bool Value::IsNumber() const { return std::holds_alternative<double>(data); }
     const Object& Value::AsObject() const { return std::get<Object>(data); }
     const Array& Value::AsArray() const { return std::get<Array>(data); }
     const std::string& Value::AsString() const { return std::get<std::string>(data); }
-    bool Value::AsBool(bool fallback) const { return IsBool() ? std::get<bool>(data) : fallback; }
-    double Value::AsNumber(double fallback) const { return IsNumber() ? std::get<double>(data) : fallback; }
 
     namespace
     {
@@ -268,111 +259,11 @@ namespace jsonlite
             size_t index_{0};
             unsigned depth_{0};
         };
-
-        std::string Escape(const std::string& value)
-        {
-            std::ostringstream stream;
-            for (const auto ch : value)
-            {
-                switch (ch)
-                {
-                case '"': stream << "\\\""; break;
-                case '\\': stream << "\\\\"; break;
-                case '\n': stream << "\\n"; break;
-                case '\r': stream << "\\r"; break;
-                case '\t': stream << "\\t"; break;
-                default:
-                    if (static_cast<unsigned char>(ch) < 0x20)
-                    {
-                        constexpr char hex[] = "0123456789abcdef";
-                        stream << "\\u00" << hex[(static_cast<unsigned char>(ch) >> 4)] << hex[ch & 15];
-                    }
-                    else stream << ch;
-                    break;
-                }
-            }
-
-            return stream.str();
-        }
-
-        void WriteValue(const Value& value, std::ostringstream& stream, int indentSize, int depth)
-        {
-            if (std::holds_alternative<std::nullptr_t>(value.data))
-            {
-                stream << "null";
-            }
-            else if (std::holds_alternative<bool>(value.data))
-            {
-                stream << (std::get<bool>(value.data) ? "true" : "false");
-            }
-            else if (std::holds_alternative<double>(value.data))
-            {
-                const double number = std::get<double>(value.data);
-                if (!std::isfinite(number)) throw std::runtime_error("Non-finite JSON number.");
-                stream << std::setprecision(std::numeric_limits<double>::max_digits10) << number;
-            }
-            else if (std::holds_alternative<std::string>(value.data))
-            {
-                stream << '"' << Escape(std::get<std::string>(value.data)) << '"';
-            }
-            else if (std::holds_alternative<Array>(value.data))
-            {
-                const auto& array = std::get<Array>(value.data);
-                stream << "[";
-                if (!array.empty())
-                {
-                    stream << "\n";
-                    for (size_t i = 0; i < array.size(); ++i)
-                    {
-                        stream << std::string((depth + 1) * indentSize, ' ');
-                        WriteValue(array[i], stream, indentSize, depth + 1);
-                        if (i + 1 < array.size())
-                        {
-                            stream << ",";
-                        }
-                        stream << "\n";
-                    }
-                    stream << std::string(depth * indentSize, ' ');
-                }
-                stream << "]";
-            }
-            else
-            {
-                const auto& object = std::get<Object>(value.data);
-                stream << "{";
-                if (!object.empty())
-                {
-                    stream << "\n";
-                    size_t index = 0;
-                    for (const auto& [key, child] : object)
-                    {
-                        stream << std::string((depth + 1) * indentSize, ' ') << '"' << Escape(key) << "\": ";
-                        WriteValue(child, stream, indentSize, depth + 1);
-                        if (++index < object.size())
-                        {
-                            stream << ",";
-                        }
-                        stream << "\n";
-                    }
-                    stream << std::string(depth * indentSize, ' ');
-                }
-                stream << "}";
-            }
-        }
     }
 
     Value Parse(const std::string& input)
     {
         Parser parser(input);
         return parser.ParseDocument();
-    }
-
-    std::string Serialize(const Value& value, int indentSize)
-    {
-        std::ostringstream stream;
-        stream.imbue(std::locale::classic());
-        if (indentSize < 0 || indentSize > 16) throw std::runtime_error("Invalid JSON indentation.");
-        WriteValue(value, stream, indentSize, 0);
-        return stream.str();
     }
 }

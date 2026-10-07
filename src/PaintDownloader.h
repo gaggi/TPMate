@@ -25,7 +25,7 @@ public:
     void SetPaintOptions(bool cars, bool helmets, bool suits, bool numbers, bool specMaps);
     void SetReloadExcludeWindow(HWND window);
     void Stop();
-    void OnSessionInfo(std::string yaml, PresentCars presentCars);
+    void OnSessionInfo(std::optional<std::string> yaml, PresentCars presentCars);
     void OnSimulatorExit();
     void OnIRacingTextureReload();
     bool DeleteDownloadedPaints();
@@ -45,6 +45,7 @@ private:
     std::atomic_uint sessionGeneration_{0};
     std::optional<std::string> nextSession_;
     PresentCars presentCars_;
+    bool presenceChanged_ = false;
     bool forceRefresh_ = false;
     bool optionsChanged_ = false;
     bool invalidateSession_ = false;

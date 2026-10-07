@@ -238,11 +238,13 @@ void PaintDownloader::SetPaintOptions(bool cars, bool helmets, bool suits, bool 
     }
 }
 
-void PaintDownloader::OnSessionInfo(std::string yaml, PresentCars presentCars)
+void PaintDownloader::OnSessionInfo(std::optional<std::string> yaml, PresentCars presentCars)
 {
     std::lock_guard lock(mutex_);
-    nextSession_ = std::move(yaml);
+    if (yaml)
+        nextSession_ = std::move(yaml);
     presentCars_ = std::move(presentCars);
+    presenceChanged_ = true;
     workAvailable_.notify_one();
 }
 
@@ -255,6 +257,7 @@ void PaintDownloader::OnSimulatorExit()
         workAvailable_.notify_one();
         nextSession_.reset();
         presentCars_.reset();
+        presenceChanged_ = false;
     }
 }
 
@@ -289,17 +292,21 @@ void PaintDownloader::Run()
         bool forceRefresh = false;
         bool optionsChanged = false;
         bool invalidateSession = false;
+        bool presenceChanged = false;
         PresentCars presentCars;
         {
             std::unique_lock lock(mutex_);
             workAvailable_.wait(lock, [&]()
             {
-                return stopping_.load() || nextSession_.has_value() || forceRefresh_ || optionsChanged_ || invalidateSession_;
+                return stopping_.load() || nextSession_.has_value() || presenceChanged_ || forceRefresh_ ||
+                    optionsChanged_ || invalidateSession_;
             });
             if (stopping_.load())
                 break;
             yaml.swap(nextSession_);
             presentCars = presentCars_;
+            presenceChanged = presenceChanged_;
+            presenceChanged_ = false;
             forceRefresh = forceRefresh_;
             forceRefresh_ = false;
             optionsChanged = optionsChanged_;
@@ -353,9 +360,10 @@ void PaintDownloader::Run()
             forceRefresh = false;
         }
 
-        if (currentSession && (parsedSessionInfo || forceRefresh || optionsChanged))
+        const bool onlyPresent = onlyPresentDrivers_.load();
+        // Presence changes only affect the selection when the present-drivers filter is enabled.
+        if (currentSession && (parsedSessionInfo || forceRefresh || optionsChanged || (presenceChanged && onlyPresent)))
         {
-            const bool onlyPresent = onlyPresentDrivers_.load();
             if (onlyPresent && !presentCars && !presenceWarningLogged && logCallback_)
                 logCallback_(LogLevel::Info, "Waiting for valid vehicle-presence telemetry; other drivers' paints are deferred.");
             presenceWarningLogged = onlyPresent && !presentCars;

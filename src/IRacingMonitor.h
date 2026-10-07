@@ -4,7 +4,10 @@
 #include "CarPresence.h"
 
 #include <atomic>
+#include <condition_variable>
 #include <functional>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -12,7 +15,8 @@ class IRacingMonitor final
 {
 public:
     using StatusCallback = std::function<void(bool connected)>;
-    using SessionCallback = std::function<void(std::string sessionYaml, PresentCars presentCars)>;
+    // sessionYaml is nullopt when only vehicle presence changed since the previous callback.
+    using SessionCallback = std::function<void(std::optional<std::string> sessionYaml, PresentCars presentCars)>;
     using SimulatorExitCallback = std::function<void()>;
 
     IRacingMonitor(StatusCallback statusCallback, SessionCallback sessionCallback,
@@ -28,5 +32,7 @@ private:
     SimulatorExitCallback simulatorExitCallback_;
     LogCallback logCallback_;
     std::atomic_bool stopping_{false};
+    std::mutex stopMutex_;
+    std::condition_variable stopRequested_;
     std::thread thread_;
 };

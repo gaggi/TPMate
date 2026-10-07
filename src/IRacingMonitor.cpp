@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <tlhelp32.h>
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstddef>
 #include <cstring>
@@ -135,7 +136,11 @@ void IRacingMonitor::Start()
 
 void IRacingMonitor::Stop()
 {
-    stopping_ = true;
+    {
+        std::lock_guard lock(stopMutex_);
+        stopping_ = true;
+    }
+    stopRequested_.notify_all();
     if (thread_.joinable())
         thread_.join();
 }
@@ -145,7 +150,6 @@ void IRacingMonitor::Run()
     bool previous = false;
     bool simulatorWasRunning = IsSimulatorRunning();
     int lastSessionUpdate = (std::numeric_limits<int>::min)();
-    std::string currentYaml;
     PresentCars lastPresentCars;
     if (logCallback_)
         logCallback_(LogLevel::Info, "Waiting for the iRacing simulator shared memory.");
@@ -153,7 +157,9 @@ void IRacingMonitor::Run()
     while (!stopping_)
     {
         SessionSnapshot snapshot = ReadSessionSnapshot(lastSessionUpdate);
-        const bool simulatorRunning = snapshot.connected || IsSimulatorRunning();
+        // Process snapshots are only needed to notice the simulator exiting after a disconnect,
+        // so the idle loop (iRacing not running) costs one failed OpenFileMapping per second.
+        const bool simulatorRunning = snapshot.connected || (simulatorWasRunning && IsSimulatorRunning());
         if (simulatorWasRunning && !simulatorRunning)
         {
             if (logCallback_)
@@ -161,7 +167,6 @@ void IRacingMonitor::Run()
             if (simulatorExitCallback_)
                 simulatorExitCallback_();
             lastSessionUpdate = (std::numeric_limits<int>::min)();
-            currentYaml.clear();
             lastPresentCars.reset();
         }
         simulatorWasRunning = simulatorRunning;
@@ -182,17 +187,21 @@ void IRacingMonitor::Run()
             lastSessionUpdate = snapshot.update;
             if (logCallback_)
                 logCallback_(LogLevel::Verbose, "Received a new iRacing session-info update.");
-            currentYaml = std::move(snapshot.yaml);
+            lastPresentCars = snapshot.presentCars;
             if (sessionCallback_)
-                sessionCallback_(currentYaml, snapshot.presentCars);
-            lastPresentCars = std::move(snapshot.presentCars);
+                sessionCallback_(std::move(snapshot.yaml), std::move(snapshot.presentCars));
         }
-        else if (connected && snapshot.update == lastSessionUpdate && !currentYaml.empty() && snapshot.presentCars != lastPresentCars)
+        else if (connected && snapshot.update == lastSessionUpdate && snapshot.presentCars != lastPresentCars)
         {
-            if (sessionCallback_) sessionCallback_(currentYaml, snapshot.presentCars);
-            lastPresentCars = std::move(snapshot.presentCars);
+            // Presence-only change: the downloader keeps its parsed roster instead of re-parsing the YAML.
+            lastPresentCars = snapshot.presentCars;
+            if (sessionCallback_)
+                sessionCallback_(std::nullopt, std::move(snapshot.presentCars));
         }
-        if (!connected) { currentYaml.clear(); lastPresentCars.reset(); }
-        Sleep(1000);
+        if (!connected)
+            lastPresentCars.reset();
+
+        std::unique_lock lock(stopMutex_);
+        stopRequested_.wait_for(lock, std::chrono::seconds(1), [this]() { return stopping_.load(); });
     }
 }

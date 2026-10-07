@@ -26,16 +26,11 @@ namespace jsonlite
         bool IsObject() const;
         bool IsArray() const;
         bool IsString() const;
-        bool IsBool() const;
-        bool IsNumber() const;
 
         const Object& AsObject() const;
         const Array& AsArray() const;
         const std::string& AsString() const;
-        bool AsBool(bool fallback = false) const;
-        double AsNumber(double fallback = 0.0) const;
     };
 
     Value Parse(const std::string& input);
-    std::string Serialize(const Value& value, int indentSize = 2);
 }

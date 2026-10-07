@@ -17,7 +17,6 @@ public:
     bool Install(const PaintFile& paint, const std::vector<unsigned char>& compressedContents,
         const std::atomic_bool& stopping);
     bool DeleteDownloadedPaints();
-    size_t TrackedCount() const;
 
 private:
     bool Decompress(const std::vector<unsigned char>& input, std::vector<unsigned char>& output);
@@ -25,7 +24,9 @@ private:
     std::wstring StateDirectory() const;
     std::wstring ManifestPath() const;
     void LoadManifest();
+    bool EnsureStateDirectory() const;
     bool SaveManifestLocked();
+    bool AppendManifestLocked(const std::wstring& destination);
     void Log(LogLevel level, const std::string& message) const;
 
     LogCallback logCallback_;

@@ -24,7 +24,6 @@ namespace
     constexpr UINT kShowExistingWindow = WM_APP + 5;
     constexpr UINT kUpdateCheckFinished = WM_APP + 6;
     constexpr UINT kUpdateInstallFinished = WM_APP + 7;
-    constexpr UINT kTextureReloadKey = WM_APP + 8;
     constexpr int kReloadTexturesMessage = 7;
     constexpr UINT kMenuOpen = 1001;
     constexpr UINT kMenuClean = 1003;
@@ -131,7 +130,7 @@ namespace
 
 TrayApp::TrayApp()
     : monitor_([this](bool connected) { if (window_) PostMessageW(window_, kConnectionChanged, connected, 0); },
-        [this](std::string yaml, PresentCars cars) { downloader_.OnSessionInfo(std::move(yaml), std::move(cars)); },
+        [this](std::optional<std::string> yaml, PresentCars cars) { downloader_.OnSessionInfo(std::move(yaml), std::move(cars)); },
         [this]() { if (window_) PostMessageW(window_, kSessionExited, 0, 0); },
         [this](LogLevel level, const std::string& message) { PostLog(level, message); }),
       downloader_([this](LogLevel level, const std::string& message) { PostLog(level, message); })
@@ -160,8 +159,14 @@ int TrayApp::Run(HINSTANCE instance)
     if (savedLevel < LogLevelValue(LogLevel::Verbose) || savedLevel > LogLevelValue(LogLevel::Error))
         savedLevel = LogLevelValue(LogLevel::Info);
     minimumLogLevel_ = static_cast<LogLevel>(savedLevel);
+    // EcoQoS ("efficiency mode") keeps TPMate on efficiency cores and low clocks where supported,
+    // leaving performance cores to iRacing. Older Windows versions simply reject it.
+    PROCESS_POWER_THROTTLING_STATE throttling{PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+        PROCESS_POWER_THROTTLING_EXECUTION_SPEED, PROCESS_POWER_THROTTLING_EXECUTION_SPEED};
+    const bool efficiencyMode = SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling,
+        &throttling, sizeof(throttling)) != FALSE;
     if (SetPriorityClass(GetCurrentProcess(), IDLE_PRIORITY_CLASS))
-        PostLog(LogLevel::Info, "TPMate CPU priority: Low.");
+        PostLog(LogLevel::Info, efficiencyMode ? "TPMate CPU priority: Low (efficiency mode)." : "TPMate CPU priority: Low.");
     else
         PostLog(LogLevel::Warning, "Could not set TPMate CPU priority to Low (Windows error " +
             std::to_string(GetLastError()) + ").");
@@ -280,9 +285,6 @@ int TrayApp::Run(HINSTANCE instance)
 
     MSG message{};
     while (GetMessageW(&message, nullptr, 0, 0) > 0) { TranslateMessage(&message); DispatchMessageW(&message); }
-    if (reloadKeyboardHook_) UnhookWindowsHookEx(reloadKeyboardHook_);
-    reloadKeyboardHook_ = nullptr;
-    keyboardHookOwner_ = nullptr;
     if (updateThread_.joinable()) updateThread_.join();
     monitor_.Stop();
     downloader_.Stop();
@@ -364,7 +366,7 @@ LRESULT TrayApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
             autoRefreshOnReload_ = SendMessageW(reloadCheck_, BM_GETCHECK, 0, 0) == BST_CHECKED;
             SaveSettings();
             downloader_.SetAutoRefreshOnReload(autoRefreshOnReload_);
-            UpdateReloadKeyboardHook();
+            UpdateReloadShortcutListener();
             return 0;
         case kOnlyPresentDrivers:
             onlyPresentDrivers_ = SendMessageW(presentDriversCheck_, BM_GETCHECK, 0, 0) == BST_CHECKED;
@@ -403,13 +405,9 @@ LRESULT TrayApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
     case kAppendLogs: AppendQueuedLogs(); return 0;
     case kUpdateCheckFinished: FinishUpdateCheck(); return 0;
     case kUpdateInstallFinished: FinishUpdateInstall(); return 0;
-    case kTextureReloadKey:
-        if (connected_ && autoRefreshOnReload_)
-        {
-            PostLog(LogLevel::Info, "Detected Ctrl+R in iRacing; requesting fresh session paints.");
-            downloader_.OnIRacingTextureReload();
-        }
-        return 0;
+    case WM_INPUT:
+        OnRawKeyboardInput(reinterpret_cast<HRAWINPUT>(lParam));
+        break; // DefWindowProc releases the raw input buffer.
     case kSessionExited:
         downloader_.OnSimulatorExit();
         return 0;
@@ -448,9 +446,8 @@ LRESULT TrayApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
         if (minimizeToTray_) { ShowWindow(window_, SW_HIDE); return 0; }
         DestroyWindow(window_); return 0;
     case WM_DESTROY:
-        if (reloadKeyboardHook_) UnhookWindowsHookEx(reloadKeyboardHook_);
-        reloadKeyboardHook_ = nullptr;
-        keyboardHookOwner_ = nullptr;
+        connected_ = false;
+        UpdateReloadShortcutListener();
         PostQuitMessage(0);
         return 0;
     }
@@ -741,65 +738,62 @@ void TrayApp::UpdateFonts()
 void TrayApp::UpdateConnection(bool connected)
 {
     connected_ = connected;
-    UpdateReloadKeyboardHook();
+    UpdateReloadShortcutListener();
     SetWindowTextW(statusText_, connected_ ? L"Connected to iRacing." : L"Waiting for iRacing...");
     wcscpy_s(iconData_.szTip, connected_ ? L"TPMate - Connected to iRacing" : L"TPMate - Waiting for iRacing");
     iconData_.uFlags = NIF_TIP | NIF_SHOWTIP; Shell_NotifyIconW(NIM_MODIFY, &iconData_);
 }
 
-void TrayApp::UpdateReloadKeyboardHook()
+void TrayApp::UpdateReloadShortcutListener()
 {
+    // Raw input is delivered asynchronously, so unlike a low-level keyboard hook it can never
+    // delay iRacing's keyboard input while this low-priority process is waiting for CPU time.
     const bool wanted = connected_ && autoRefreshOnReload_;
-    if (wanted && !reloadKeyboardHook_)
+    if (wanted == reloadShortcutListening_)
+        return;
+    RAWINPUTDEVICE keyboard{0x01, 0x06, wanted ? static_cast<DWORD>(RIDEV_INPUTSINK) : static_cast<DWORD>(RIDEV_REMOVE),
+        wanted ? window_ : nullptr};
+    if (RegisterRawInputDevices(&keyboard, 1, sizeof(keyboard)))
     {
-        reloadShortcut_.Reset();
-        keyboardHookOwner_ = this;
-        reloadKeyboardHook_ = SetWindowsHookExW(WH_KEYBOARD_LL, KeyboardProc, instance_, 0);
-        if (!reloadKeyboardHook_)
-        {
-            keyboardHookOwner_ = nullptr;
-            PostLog(LogLevel::Warning, "Could not enable Ctrl+R detection (Windows error " + std::to_string(GetLastError()) + ").");
-        }
-    }
-    else if (!wanted && reloadKeyboardHook_)
-    {
-        UnhookWindowsHookEx(reloadKeyboardHook_);
-        reloadKeyboardHook_ = nullptr;
-        keyboardHookOwner_ = nullptr;
+        reloadShortcutListening_ = wanted;
         reloadShortcut_.Reset();
     }
+    else if (wanted)
+        PostLog(LogLevel::Warning, "Could not enable Ctrl+R detection (Windows error " + std::to_string(GetLastError()) + ").");
 }
 
-LRESULT CALLBACK TrayApp::KeyboardProc(int code, WPARAM wParam, LPARAM lParam)
+void TrayApp::OnRawKeyboardInput(HRAWINPUT input)
 {
-    auto* self = keyboardHookOwner_;
-    if (code == HC_ACTION && self)
+    RAWINPUT raw{};
+    UINT size = sizeof(raw);
+    if (!reloadShortcutListening_ ||
+        GetRawInputData(input, RID_INPUT, &raw, &size, sizeof(RAWINPUTHEADER)) == static_cast<UINT>(-1) ||
+        raw.header.dwType != RIM_TYPEKEYBOARD)
+        return;
+    const auto& key = raw.data.keyboard;
+    // Input injected with SendInput has no source device.
+    if (!reloadShortcut_.OnKey(key.VKey, key.Message, raw.header.hDevice == nullptr,
+        (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0,
+        (GetAsyncKeyState(VK_MENU) & 0x8000) != 0,
+        (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0))
+        return;
+    DWORD processId = 0;
+    GetWindowThreadProcessId(GetForegroundWindow(), &processId);
+    HANDLE process = processId ? OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId) : nullptr;
+    if (!process)
+        return;
+    wchar_t path[MAX_PATH * 4];
+    DWORD length = static_cast<DWORD>(std::size(path));
+    bool simulator = false;
+    if (QueryFullProcessImageNameW(process, 0, path, &length))
     {
-        const auto* key = reinterpret_cast<const KBDLLHOOKSTRUCT*>(lParam);
-        if (key->vkCode == 'R' && self->reloadShortcut_.OnKey(key->vkCode, wParam,
-            (key->flags & LLKHF_INJECTED) != 0,
-            (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0,
-            (GetAsyncKeyState(VK_MENU) & 0x8000) != 0,
-            (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0))
-        {
-            DWORD processId = 0;
-            GetWindowThreadProcessId(GetForegroundWindow(), &processId);
-            HANDLE process = processId ? OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId) : nullptr;
-            if (process)
-            {
-                wchar_t path[32768]{};
-                DWORD length = static_cast<DWORD>(std::size(path));
-                if (QueryFullProcessImageNameW(process, 0, path, &length))
-                {
-                    const wchar_t* name = wcsrchr(path, L'\\');
-                    name = name ? name + 1 : path;
-                    if (ReloadShortcut::IsSimulator(name))
-                        PostMessageW(self->window_, kTextureReloadKey, 0, 0);
-                }
-                CloseHandle(process);
-            }
-        }
+        const wchar_t* name = wcsrchr(path, L'\\');
+        simulator = ReloadShortcut::IsSimulator(name ? name + 1 : path);
     }
-    // Observe the shortcut; never consume it or change iRacing's key handling.
-    return CallNextHookEx(nullptr, code, wParam, lParam);
+    CloseHandle(process);
+    if (simulator && connected_ && autoRefreshOnReload_)
+    {
+        PostLog(LogLevel::Info, "Detected Ctrl+R in iRacing; requesting fresh session paints.");
+        downloader_.OnIRacingTextureReload();
+    }
 }

@@ -6,10 +6,7 @@
 #include <shlobj.h>
 
 #include <algorithm>
-#include <array>
-#include <cctype>
 #include <filesystem>
-#include <fstream>
 #include <limits>
 #include <string_view>
 #include <utility>
@@ -214,10 +211,15 @@ void PaintStore::LoadManifest()
         Log(LogLevel::Verbose, "Loaded " + std::to_string(managedFiles_.size()) + " previously managed paint files.");
 }
 
-bool PaintStore::SaveManifestLocked()
+bool PaintStore::EnsureStateDirectory() const
 {
     const auto directory = StateDirectory();
-    if (directory.empty() || !CreateDirectoryW(directory.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS)
+    return !directory.empty() && (CreateDirectoryW(directory.c_str(), nullptr) || GetLastError() == ERROR_ALREADY_EXISTS);
+}
+
+bool PaintStore::SaveManifestLocked()
+{
+    if (!EnsureStateDirectory())
         return false;
     if (managedFiles_.empty())
     {
@@ -245,6 +247,26 @@ bool PaintStore::SaveManifestLocked()
     return true;
 }
 
+bool PaintStore::AppendManifestLocked(const std::wstring& destination)
+{
+    // Appending keeps each install O(1); full rewrites only happen when files are deleted.
+    if (!EnsureStateDirectory())
+        return false;
+    HANDLE file = CreateFileW(ManifestPath().c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, OPEN_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE)
+        return false;
+    std::wstring line;
+    if (GetLastError() != ERROR_ALREADY_EXISTS)
+        line.push_back(static_cast<wchar_t>(0xFEFF));
+    line += destination + L"\r\n";
+    const DWORD bytesToWrite = static_cast<DWORD>(line.size() * sizeof(wchar_t));
+    DWORD written = 0;
+    const bool ok = WriteFile(file, line.data(), bytesToWrite, &written, nullptr) && written == bytesToWrite;
+    CloseHandle(file);
+    return ok;
+}
+
 bool PaintStore::Decompress(const std::vector<unsigned char>& input, std::vector<unsigned char>& output)
 {
     if (input.empty() || input.size() > (std::numeric_limits<unsigned int>::max)())
@@ -254,26 +276,29 @@ bool PaintStore::Decompress(const std::vector<unsigned char>& input, std::vector
         return false;
     stream.next_in = reinterpret_cast<char*>(const_cast<unsigned char*>(input.data()));
     stream.avail_in = static_cast<unsigned int>(input.size());
-    std::array<unsigned char, 64 * 1024> buffer{};
+    // Decompress straight into the output buffer and grow it geometrically up to the safety limit.
+    output.resize((std::min)(kMaxUncompressedBytes, (std::max)(input.size() * 4, static_cast<size_t>(256 * 1024))));
+    size_t produced = 0;
     int result = BZ_OK;
-    output.clear();
-    output.reserve((std::min)(kMaxUncompressedBytes,
-        (std::max)(input.size() * 4, static_cast<size_t>(256 * 1024))));
     while (result == BZ_OK)
     {
-        stream.next_out = reinterpret_cast<char*>(buffer.data());
-        stream.avail_out = static_cast<unsigned int>(buffer.size());
-        result = BZ2_bzDecompress(&stream);
-        const size_t produced = buffer.size() - stream.avail_out;
-        if (output.size() + produced > kMaxUncompressedBytes)
+        if (produced == output.size())
         {
-            result = BZ_MEM_ERROR;
-            break;
+            if (output.size() >= kMaxUncompressedBytes)
+            {
+                result = BZ_MEM_ERROR;
+                break;
+            }
+            output.resize((std::min)(kMaxUncompressedBytes, output.size() * 2));
         }
-        output.insert(output.end(), buffer.begin(), buffer.begin() + produced);
+        stream.next_out = reinterpret_cast<char*>(output.data() + produced);
+        stream.avail_out = static_cast<unsigned int>(output.size() - produced);
+        result = BZ2_bzDecompress(&stream);
+        produced = output.size() - stream.avail_out;
     }
     BZ2_bzDecompressEnd(&stream);
-    return result == BZ_STREAM_END && !output.empty();
+    output.resize(result == BZ_STREAM_END ? produced : 0);
+    return !output.empty();
 }
 
 bool PaintStore::Install(const PaintFile& paint, const std::vector<unsigned char>& contents,
@@ -334,7 +359,7 @@ bool PaintStore::Install(const PaintFile& paint, const std::vector<unsigned char
         Log(LogLevel::Error, "Could not install a downloaded paint at " + WideToUtf8(destination) + ".");
         return false;
     }
-    if (managedFiles_.insert(destination).second && !SaveManifestLocked())
+    if (managedFiles_.insert(destination).second && !AppendManifestLocked(destination))
         Log(LogLevel::Warning, "Paint installed, but its cleanup entry could not be saved.");
     Log(LogLevel::Info, "Installed " + WideToUtf8(std::filesystem::path(destination).filename().wstring()) +
         " for " + (paint.carPath.empty() ? std::string("driver") : paint.carPath) + ".");
@@ -372,10 +397,4 @@ bool PaintStore::DeleteDownloadedPaints()
             "Removed " + std::to_string(removedCount) + " downloaded paint files." +
             (failedCount ? " " + std::to_string(failedCount) + " files could not be deleted." : ""));
     return allDeleted;
-}
-
-size_t PaintStore::TrackedCount() const
-{
-    std::lock_guard lock(mutex_);
-    return managedFiles_.size();
 }
