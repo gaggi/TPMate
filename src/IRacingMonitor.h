@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AppLog.h"
+#include "CarPresence.h"
 
 #include <atomic>
 #include <functional>
@@ -11,7 +12,7 @@ class IRacingMonitor final
 {
 public:
     using StatusCallback = std::function<void(bool connected)>;
-    using SessionCallback = std::function<void(std::string sessionYaml)>;
+    using SessionCallback = std::function<void(std::string sessionYaml, PresentCars presentCars)>;
     using SimulatorExitCallback = std::function<void()>;
 
     IRacingMonitor(StatusCallback statusCallback, SessionCallback sessionCallback,

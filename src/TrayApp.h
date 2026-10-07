@@ -53,6 +53,7 @@ private:
     HWND minimizeCheck_ = nullptr;
     HWND deleteCheck_ = nullptr;
     HWND reloadCheck_ = nullptr;
+    HWND presentDriversCheck_ = nullptr;
     HWND loadCarsCheck_ = nullptr;
     HWND loadHelmetsCheck_ = nullptr;
     HWND loadSuitsCheck_ = nullptr;
@@ -78,6 +79,7 @@ private:
     bool minimizeToTray_ = true;
     bool deleteAfterSession_ = true;
     bool autoRefreshOnReload_ = true;
+    bool onlyPresentDrivers_ = true;
     bool loadCars_ = true;
     bool loadHelmets_ = true;
     bool loadSuits_ = true;

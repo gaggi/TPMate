@@ -41,6 +41,7 @@ namespace
     constexpr int kLoadNumbers = 2013;
     constexpr int kLoadSpecMaps = 2014;
     constexpr int kStartWithWindows = 2015;
+    constexpr int kOnlyPresentDrivers = 2016;
 
     std::wstring ConfigDirectory()
     {
@@ -130,7 +131,7 @@ namespace
 
 TrayApp::TrayApp()
     : monitor_([this](bool connected) { if (window_) PostMessageW(window_, kConnectionChanged, connected, 0); },
-        [this](std::string yaml) { downloader_.OnSessionInfo(std::move(yaml)); },
+        [this](std::string yaml, PresentCars cars) { downloader_.OnSessionInfo(std::move(yaml), std::move(cars)); },
         [this]() { if (window_) PostMessageW(window_, kSessionExited, 0, 0); },
         [this](LogLevel level, const std::string& message) { PostLog(level, message); }),
       downloader_([this](LogLevel level, const std::string& message) { PostLog(level, message); })
@@ -147,6 +148,7 @@ int TrayApp::Run(HINSTANCE instance)
     minimizeToTray_ = GetPrivateProfileIntW(L"Settings", L"MinimizeToTray", 1, settingsPath.c_str()) != 0;
     deleteAfterSession_ = GetPrivateProfileIntW(L"Settings", L"DeleteAfterSession", 1, settingsPath.c_str()) != 0;
     autoRefreshOnReload_ = GetPrivateProfileIntW(L"Settings", L"RefreshOnTextureReload", 1, settingsPath.c_str()) != 0;
+    onlyPresentDrivers_ = GetPrivateProfileIntW(L"Settings", L"OnlyPresentDrivers", 1, settingsPath.c_str()) != 0;
     loadCars_ = GetPrivateProfileIntW(L"Settings", L"LoadCars", 1, settingsPath.c_str()) != 0;
     loadHelmets_ = GetPrivateProfileIntW(L"Settings", L"LoadHelmets", 1, settingsPath.c_str()) != 0;
     loadSuits_ = GetPrivateProfileIntW(L"Settings", L"LoadSuits", 1, settingsPath.c_str()) != 0;
@@ -202,6 +204,8 @@ int TrayApp::Run(HINSTANCE instance)
         390, 562, 390, 24, window_, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kSettingsDelete)), instance_, nullptr);
     reloadCheck_ = CreateWindowExW(0, L"BUTTON", L"Re-download paints on Ctrl+R", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
         12, 590, 490, 24, window_, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kSettingsReload)), instance_, nullptr);
+    presentDriversCheck_ = CreateWindowExW(0, L"BUTTON", L"Only download present drivers", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+        0, 0, 300, 24, window_, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kOnlyPresentDrivers)), instance_, nullptr);
     logLevelLabel_ = CreateWindowExW(0, L"STATIC", L"Log level", WS_CHILD | WS_VISIBLE | SS_LEFT,
         536, 590, 82, 24, window_, nullptr, instance_, nullptr);
     logLevelCombo_ = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL,
@@ -253,6 +257,7 @@ int TrayApp::Run(HINSTANCE instance)
     SendMessageW(minimizeCheck_, BM_SETCHECK, minimizeToTray_ ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(deleteCheck_, BM_SETCHECK, deleteAfterSession_ ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(reloadCheck_, BM_SETCHECK, autoRefreshOnReload_ ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(presentDriversCheck_, BM_SETCHECK, onlyPresentDrivers_ ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(logLevelCombo_, CB_SETCURSEL, selectedLevelIndex, 0);
     SendMessageW(logEdit_, EM_SETBKGNDCOLOR, 0, RGB(255, 255, 255));
     SendMessageW(logEdit_, EM_EXLIMITTEXT, 0, 1000000);
@@ -264,6 +269,7 @@ int TrayApp::Run(HINSTANCE instance)
     AddTrayIcon();
     iracingBroadcastMessage_ = RegisterWindowMessageW(L"IRSDK_BROADCASTMSG");
     downloader_.SetAutoRefreshOnReload(autoRefreshOnReload_);
+    downloader_.SetOnlyPresentDrivers(onlyPresentDrivers_);
     downloader_.SetMaxConcurrentDownloads(maxConcurrentDownloads_);
     downloader_.SetReloadExcludeWindow(window_);
     downloader_.SetPaintOptions(loadCars_, loadHelmets_, loadSuits_, loadNumbers_, loadSpecMaps_);
@@ -359,6 +365,11 @@ LRESULT TrayApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
             SaveSettings();
             downloader_.SetAutoRefreshOnReload(autoRefreshOnReload_);
             UpdateReloadKeyboardHook();
+            return 0;
+        case kOnlyPresentDrivers:
+            onlyPresentDrivers_ = SendMessageW(presentDriversCheck_, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            SaveSettings();
+            downloader_.SetOnlyPresentDrivers(onlyPresentDrivers_);
             return 0;
         }
         if (LOWORD(wParam) == kLogLevelCombo && HIWORD(wParam) == CBN_SELCHANGE)
@@ -579,6 +590,7 @@ void TrayApp::SaveSettings()
     WritePrivateProfileStringW(L"Settings", L"MinimizeToTray", minimizeToTray_ ? L"1" : L"0", path.c_str());
     WritePrivateProfileStringW(L"Settings", L"DeleteAfterSession", deleteAfterSession_ ? L"1" : L"0", path.c_str());
     WritePrivateProfileStringW(L"Settings", L"RefreshOnTextureReload", autoRefreshOnReload_ ? L"1" : L"0", path.c_str());
+    WritePrivateProfileStringW(L"Settings", L"OnlyPresentDrivers", onlyPresentDrivers_ ? L"1" : L"0", path.c_str());
     WritePrivateProfileStringW(L"Settings", L"LoadCars", loadCars_ ? L"1" : L"0", path.c_str());
     WritePrivateProfileStringW(L"Settings", L"LoadHelmets", loadHelmets_ ? L"1" : L"0", path.c_str());
     WritePrivateProfileStringW(L"Settings", L"LoadSuits", loadSuits_ ? L"1" : L"0", path.c_str());
@@ -691,9 +703,10 @@ void TrayApp::LayoutControls(int width, int height)
     place(loadHelmetsCheck_, paintX, settingsY + 112, paintsWidth - 32, 24);
     place(loadSuitsCheck_, paintX, settingsY + 140, paintsWidth - 32, 24);
     place(minimizeCheck_, behaviorX + 16, settingsY + 30, behaviorWidth - 32, 24);
-    place(startupCheck_, behaviorX + 16, settingsY + 60, behaviorWidth - 32, 24);
-    place(deleteCheck_, behaviorX + 16, settingsY + 90, behaviorWidth - 32, 24);
-    place(reloadCheck_, behaviorX + 16, settingsY + 120, behaviorWidth - 32, 24);
+    place(startupCheck_, behaviorX + 16, settingsY + 57, behaviorWidth - 32, 24);
+    place(deleteCheck_, behaviorX + 16, settingsY + 84, behaviorWidth - 32, 24);
+    place(reloadCheck_, behaviorX + 16, settingsY + 111, behaviorWidth - 32, 24);
+    place(presentDriversCheck_, behaviorX + 16, settingsY + 138, behaviorWidth - 32, 24);
     place(logLevelLabel_, downloadsX + 16, settingsY + 28, downloadsWidth - 32, 20);
     place(logLevelCombo_, downloadsX + 16, settingsY + 50, downloadsWidth - 32, 180);
     place(concurrencyLabel_, downloadsX + 16, settingsY + 96, downloadsWidth - 32, 20);
@@ -709,7 +722,7 @@ void TrayApp::UpdateFonts()
     uiFont_ = create(L"Segoe UI", 9, FW_NORMAL);
     headingFont_ = create(L"Segoe UI", 10, FW_SEMIBOLD);
     logFont_ = create(L"Consolas", 9, FW_NORMAL);
-    for (HWND control : {updateButton_, minimizeCheck_, deleteCheck_, reloadCheck_, loadCarsCheck_, loadHelmetsCheck_,
+    for (HWND control : {updateButton_, minimizeCheck_, deleteCheck_, reloadCheck_, presentDriversCheck_, loadCarsCheck_, loadHelmetsCheck_,
         loadSuitsCheck_, loadNumbersCheck_, loadSpecMapsCheck_, startupCheck_, logLevelLabel_, logLevelCombo_,
         concurrencyLabel_, concurrencyCombo_})
         if (control) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont_), TRUE);

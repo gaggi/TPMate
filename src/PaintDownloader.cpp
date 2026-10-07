@@ -208,6 +208,14 @@ void PaintDownloader::SetAutoRefreshOnReload(bool enabled)
     autoRefreshOnReload_ = enabled;
 }
 
+void PaintDownloader::SetOnlyPresentDrivers(bool enabled)
+{
+    if (onlyPresentDrivers_.exchange(enabled) == enabled) return;
+    std::lock_guard lock(mutex_);
+    optionsChanged_ = true;
+    workAvailable_.notify_one();
+}
+
 void PaintDownloader::SetMaxConcurrentDownloads(unsigned int count)
 {
     maxConcurrentDownloads_ = (std::clamp)(count, 1u, 10u);
@@ -230,10 +238,11 @@ void PaintDownloader::SetPaintOptions(bool cars, bool helmets, bool suits, bool 
     }
 }
 
-void PaintDownloader::OnSessionInfo(std::string yaml)
+void PaintDownloader::OnSessionInfo(std::string yaml, PresentCars presentCars)
 {
     std::lock_guard lock(mutex_);
     nextSession_ = std::move(yaml);
+    presentCars_ = std::move(presentCars);
     workAvailable_.notify_one();
 }
 
@@ -245,6 +254,7 @@ void PaintDownloader::OnSimulatorExit()
         invalidateSession_ = true;
         workAvailable_.notify_one();
         nextSession_.reset();
+        presentCars_.reset();
     }
 }
 
@@ -271,6 +281,7 @@ void PaintDownloader::Run()
     std::optional<SessionInfo> currentSession;
     std::optional<SessionInfo> lastProcessedSession;
     bool parseWarningLogged = false;
+    bool presenceWarningLogged = false;
     size_t diagnosticCount = 0;
     while (!stopping_.load())
     {
@@ -278,6 +289,7 @@ void PaintDownloader::Run()
         bool forceRefresh = false;
         bool optionsChanged = false;
         bool invalidateSession = false;
+        PresentCars presentCars;
         {
             std::unique_lock lock(mutex_);
             workAvailable_.wait(lock, [&]()
@@ -287,6 +299,7 @@ void PaintDownloader::Run()
             if (stopping_.load())
                 break;
             yaml.swap(nextSession_);
+            presentCars = presentCars_;
             forceRefresh = forceRefresh_;
             forceRefresh_ = false;
             optionsChanged = optionsChanged_;
@@ -301,6 +314,7 @@ void PaintDownloader::Run()
             currentSession.reset();
             lastProcessedSession.reset();
             lastSessionKey.clear();
+            presenceWarningLogged = false;
         }
 
         bool parsedSessionInfo = false;
@@ -341,8 +355,13 @@ void PaintDownloader::Run()
 
         if (currentSession && (parsedSessionInfo || forceRefresh || optionsChanged))
         {
-            std::wstring sessionKey = currentSession->Key();
-            for (const auto& driver : currentSession->drivers)
+            const bool onlyPresent = onlyPresentDrivers_.load();
+            if (onlyPresent && !presentCars && !presenceWarningLogged && logCallback_)
+                logCallback_(LogLevel::Info, "Waiting for valid vehicle-presence telemetry; other drivers' paints are deferred.");
+            presenceWarningLogged = onlyPresent && !presentCars;
+            const SessionInfo paintSession = SelectPaintDrivers(*currentSession, presentCars, onlyPresent);
+            std::wstring sessionKey = paintSession.Key();
+            for (const auto& driver : paintSession.drivers)
                 sessionKey += L"|" + std::to_wstring(driver.carIndex) + L":" +
                     std::to_wstring(driver.userId) + L":" + std::to_wstring(driver.teamId) +
                     L":" + std::wstring(driver.carPath.begin(), driver.carPath.end()) + L":" +
@@ -353,7 +372,7 @@ void PaintDownloader::Run()
                 const auto batchStarted = std::chrono::steady_clock::now();
                 const unsigned int batchGeneration = sessionGeneration_.load();
                 const bool isNewSession = !lastProcessedSession ||
-                    currentSession->Key() != lastProcessedSession->Key();
+                    paintSession.Key() != lastProcessedSession->Key();
                 if (forceRefresh)
                 {
                     if (logCallback_)
@@ -362,23 +381,23 @@ void PaintDownloader::Run()
                         logCallback_(LogLevel::Warning, "Some downloaded paints could not be deleted before refresh.");
                 }
                 const unsigned int concurrency = maxConcurrentDownloads_.load();
-                SessionInfo affectedSession = *currentSession;
-                bool shouldQuery = true;
+                if (onlyPresent && logCallback_)
+                    logCallback_(LogLevel::Verbose, "Paint filter: " + std::to_string(paintSession.drivers.size()) +
+                        " present/player drivers out of " + std::to_string(currentSession->drivers.size()) + " roster entries.");
+                SessionInfo affectedSession = paintSession;
+                bool shouldQuery = !affectedSession.drivers.empty();
                 const bool canUseRosterDelta = !forceRefresh && !optionsChanged && lastProcessedSession &&
-                    currentSession->Key() == lastProcessedSession->Key() &&
+                    paintSession.Key() == lastProcessedSession->Key() &&
                     !isNewSession;
                 if (canUseRosterDelta)
                 {
                     affectedSession.drivers.clear();
-                    for (const auto& driver : currentSession->drivers)
+                    for (const auto& driver : paintSession.drivers)
                     {
                         const auto existing = std::find_if(lastProcessedSession->drivers.begin(), lastProcessedSession->drivers.end(),
                             [&](const SessionDriver& oldDriver)
                             {
-                                return oldDriver.carIndex == driver.carIndex && oldDriver.userId == driver.userId &&
-                                    oldDriver.teamId == driver.teamId &&
-                                    _stricmp(oldDriver.carPath.c_str(), driver.carPath.c_str()) == 0 &&
-                                    oldDriver.carNumber == driver.carNumber;
+                                return SamePaintDriver(oldDriver, driver);
                             });
                         if (existing == lastProcessedSession->drivers.end())
                             affectedSession.drivers.push_back(driver);
@@ -388,17 +407,20 @@ void PaintDownloader::Run()
                         logCallback_(LogLevel::Info, "Session roster changed; no new or changed drivers need paint lookups.");
                 }
                 lastSessionKey = sessionKey;
-                lastProcessedSession = *currentSession;
+                if (!lastProcessedSession || isNewSession || forceRefresh || optionsChanged)
+                    lastProcessedSession = paintSession;
+                else
+                    RememberPaintDrivers(*lastProcessedSession, paintSession);
                 // Team lookups are an aggregate API request, so query the complete roster,
                 // then keep only paints belonging to newly added or changed entries.
-                const SessionInfo& lookupSession = currentSession->teamRacing ? *currentSession : affectedSession;
+                const SessionInfo& lookupSession = paintSession.teamRacing ? paintSession : affectedSession;
                 auto paints = shouldQuery ? client.FetchSessionPaints(lookupSession, stopping_, concurrency) : std::vector<PaintFile>{};
                 const unsigned int options = paintOptions_.load();
                 paints.erase(std::remove_if(paints.begin(), paints.end(), [options](const PaintFile& paint)
                 {
                     return !ShouldLoadPaint(paint.type, options);
                 }), paints.end());
-                if (shouldQuery && canUseRosterDelta && currentSession->teamRacing)
+                if (shouldQuery && (paintSession.teamRacing || onlyPresent))
                 {
                     paints.erase(std::remove_if(paints.begin(), paints.end(), [&](const PaintFile& paint)
                     {

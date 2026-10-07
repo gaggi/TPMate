@@ -24,6 +24,7 @@ add_executable(TPMate WIN32
     src/StartupRegistration.cpp
     src/TrayApp.cpp
     src/IRacingMonitor.cpp
+    src/CarPresence.cpp
     src/SessionInfo.cpp
     src/TradingPaintsClient.cpp
     src/PaintStore.cpp
@@ -37,6 +38,9 @@ target_link_libraries(TPMate PRIVATE comctl32 shell32 winhttp xmllite ole32 olea
 
 add_executable(TPMateUpdateTests EXCLUDE_FROM_ALL tests/UpdateCheckerTests.cpp src/JsonLite.cpp)
 add_executable(TPMateReloadTests EXCLUDE_FROM_ALL tests/ReloadShortcutTests.cpp)
+add_executable(TPMatePresenceTests EXCLUDE_FROM_ALL tests/CarPresenceTests.cpp src/CarPresence.cpp src/SessionInfo.cpp)
+target_include_directories(TPMatePresenceTests PRIVATE src)
+target_compile_definitions(TPMatePresenceTests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_include_directories(TPMateReloadTests PRIVATE src)
 target_compile_definitions(TPMateReloadTests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_include_directories(TPMateUpdateTests PRIVATE src)
@@ -47,6 +51,8 @@ if(MSVC)
     target_compile_options(TPMate PRIVATE /EHsc)
     target_compile_options(TPMateUpdateTests PRIVATE /EHsc)
     target_compile_options(TPMateReloadTests PRIVATE /EHsc)
+    target_compile_options(TPMatePresenceTests PRIVATE /EHsc)
+    set_property(TARGET TPMatePresenceTests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     set_property(TARGET TPMateReloadTests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     set_property(TARGET TPMateUpdateTests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     target_link_options(TPMate PRIVATE "/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'")

@@ -31,6 +31,7 @@ namespace
         bool connected = false;
         int update = -1;
         std::string yaml;
+        PresentCars presentCars;
     };
 
     bool IsSimulatorProcess(const wchar_t* name)
@@ -82,7 +83,10 @@ namespace
                     MemoryBarrier();
                     const auto updateBefore = header->sessionInfoUpdate;
                     if (updateBefore == lastUpdate)
+                    {
+                        result.update = updateBefore;
                         break;
+                    }
                     const auto offset = header->sessionInfoOffset;
                     const auto length = header->sessionInfoLength;
                     std::string candidate;
@@ -104,6 +108,8 @@ namespace
                         break;
                     }
                 }
+                if (result.update == header->sessionInfoUpdate)
+                    result.presentCars = ReadPresentCars({view, viewBytes});
             }
             UnmapViewOfFile(view);
         }
@@ -139,6 +145,8 @@ void IRacingMonitor::Run()
     bool previous = false;
     bool simulatorWasRunning = IsSimulatorRunning();
     int lastSessionUpdate = (std::numeric_limits<int>::min)();
+    std::string currentYaml;
+    PresentCars lastPresentCars;
     if (logCallback_)
         logCallback_(LogLevel::Info, "Waiting for the iRacing simulator shared memory.");
 
@@ -153,6 +161,8 @@ void IRacingMonitor::Run()
             if (simulatorExitCallback_)
                 simulatorExitCallback_();
             lastSessionUpdate = (std::numeric_limits<int>::min)();
+            currentYaml.clear();
+            lastPresentCars.reset();
         }
         simulatorWasRunning = simulatorRunning;
 
@@ -172,9 +182,17 @@ void IRacingMonitor::Run()
             lastSessionUpdate = snapshot.update;
             if (logCallback_)
                 logCallback_(LogLevel::Verbose, "Received a new iRacing session-info update.");
+            currentYaml = std::move(snapshot.yaml);
             if (sessionCallback_)
-                sessionCallback_(std::move(snapshot.yaml));
+                sessionCallback_(currentYaml, snapshot.presentCars);
+            lastPresentCars = std::move(snapshot.presentCars);
         }
+        else if (connected && snapshot.update == lastSessionUpdate && !currentYaml.empty() && snapshot.presentCars != lastPresentCars)
+        {
+            if (sessionCallback_) sessionCallback_(currentYaml, snapshot.presentCars);
+            lastPresentCars = std::move(snapshot.presentCars);
+        }
+        if (!connected) { currentYaml.clear(); lastPresentCars.reset(); }
         Sleep(1000);
     }
 }

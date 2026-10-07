@@ -10,6 +10,9 @@ A small native Windows tray application for iRacing Trading Paints. TPMate is wr
 - The window keeps its standard size; car paint layers are indented below Cars in the vertical Paints list
 - Only one instance runs per Windows session; starting either executable again opens the existing window
 - Select Cars, Helmets, and Suits independently, with Numbers and Spec Maps options for Cars
+- Only download present drivers is enabled by default. It filters the historical roster using `CarIdxTrackSurface`, includes cars in pit stalls/off track, and preloads the player's own car even in the garage. Other garage cars are deferred until they appear in the world; this is a world-presence filter, not an exact server connection list.
+- Presence changes are sampled by the existing one-second monitor and automatically trigger downloads for newly appearing drivers. Already processed drivers are remembered for the session and their paints remain installed when they disappear. Disable the checkbox to load the complete roster as before.
+- If presence telemetry is missing or temporarily invalid, remote downloads wait for valid data rather than downloading the historical roster; this also applies when checking for fresh paints with Ctrl+R. Team API results are filtered to the eligible roster before asset downloads.
 - Start with Windows creates a per-user logon task; changing this option prompts for UAC once, while subsequent logons start TPMate in the tray with normal user privileges
 - Settings are saved in `%APPDATA%\TPMate\settings.ini`
 - Closing or minimizing the window hides it in the tray by default
