@@ -520,7 +520,8 @@ void TrayApp::AddTrayIcon()
     iconData_.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP; iconData_.uCallbackMessage = kTrayMessage;
     iconData_.hIcon = static_cast<HICON>(LoadImageW(instance_, MAKEINTRESOURCEW(IDI_APPICON), IMAGE_ICON,
         GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_SHARED));
-    wcscpy_s(iconData_.szTip, L"TPMate - Waiting for iRacing");
+    // The tooltip only names the app; the window's banner shows the state.
+    wcsncpy_s(iconData_.szTip, (L"TPMate " + UpdateChecker::CurrentVersion()).c_str(), _TRUNCATE);
     Shell_NotifyIconW(NIM_ADD, &iconData_); iconData_.uVersion = NOTIFYICON_VERSION_4; Shell_NotifyIconW(NIM_SETVERSION, &iconData_);
 }
 void TrayApp::RemoveTrayIcon() { Shell_NotifyIconW(NIM_DELETE, &iconData_); }
@@ -813,19 +814,16 @@ void TrayApp::UpdateStatusDisplay()
     StatusPanel::Tone tone = StatusPanel::Tone::Neutral;
     std::wstring title = L"Waiting for iRacing";
     std::wstring detail = L"Paints are downloaded when you join a session.";
-    std::wstring tip = L"TPMate - Waiting for iRacing";
     if (connected_ && progress.batchTotal > 0)
     {
         tone = StatusPanel::Tone::Busy;
         title = L"Downloading paints" + std::wstring(separator) + count(progress.batchDone) + L" of " + count(progress.batchTotal);
         detail = session;
-        tip = L"TPMate - Downloading " + count(progress.batchDone) + L" of " + count(progress.batchTotal) + L" paints";
     }
     else if (connected_ && progress.rosterDrivers == 0)
     {
         title = L"Connected to iRacing";
         detail = L"Waiting for session info...";
-        tip = L"TPMate - Connected to iRacing";
     }
     else if (connected_)
     {
@@ -834,16 +832,8 @@ void TrayApp::UpdateStatusDisplay()
         title = L"Ready" + std::wstring(separator) + (progress.installedFiles ?
             count(progress.installedFiles) + L" paint files for " + driverText : L"no paints found for " + driverText);
         detail = join({session, failed});
-        tip = !failed.empty() ? L"TPMate - " + failed : progress.installedFiles ?
-            L"TPMate - " + count(progress.installedFiles) + L" paint files for " + driverText : L"TPMate - No paints found for " + driverText;
     }
     banner_.SetState(tone, title, detail, L"Refresh paints", connected_);
-    if (tip != iconData_.szTip)
-    {
-        wcsncpy_s(iconData_.szTip, tip.c_str(), _TRUNCATE);
-        iconData_.uFlags = NIF_TIP | NIF_SHOWTIP;
-        Shell_NotifyIconW(NIM_MODIFY, &iconData_);
-    }
 }
 
 void TrayApp::UpdateReloadShortcutListener()

@@ -5,7 +5,7 @@ A small native Windows tray application for iRacing Trading Paints. TPMate is wr
 ## Current features
 
 - Tray icon with Open, Refresh paints, Open paint folder, Clean iRacing Paints Folder, Check for updates, and Exit commands
-- The tray tooltip shows whether TPMate is waiting, downloading, ready, or had failed downloads
+- The tray tooltip shows the name and version; the window's status banner shows what TPMate is doing
 - The window uses the shared LaunchMate UI (`src/ui`, copied unchanged from LaunchMate; see LaunchMate's `docs/ui-design.md`): a sidebar with Session, Paints, Activity and Settings pages and a status banner
 - The banner shows waiting, downloading (with "34 of 96" progress) or ready, with the track, your car and failed downloads; its button refreshes the session paints without Ctrl+R
 - Session lists every driver of the roster with a pill: Not on track, Waiting, Checking, Downloading, Installed, No paint or Failed; it also opens or cleans the paint folder
