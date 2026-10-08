@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AppSettings.h"
+#include "PaintDownloader.h"
 #include "UpdateChecker.h"
 
 #include <functional>
@@ -30,6 +31,16 @@ struct PageContext
     // Saves settings.ini and hands the new values to the downloader right away.
     std::function<void()> settingsChanged;
 
+    // Session page
+    const bool* connected{};
+    std::function<PaintProgress()> progress;
+    // Results of the last paint-folder actions (an error, what was cleaned); empty at first.
+    const std::wstring* openFolderMessage{};
+    const std::wstring* cleanFolderMessage{};
+    std::function<void()> openPaintFolder;
+    // Asks first, because it moves every paint file to the Recycle Bin.
+    std::function<void()> cleanPaintFolder;
+
     // Settings page
     const bool* startWithWindows{};
     // Registers or removes the logon task (Windows asks for approval); returns an
@@ -42,5 +53,6 @@ struct PageContext
 
 // Each function creates a page as a child of `parent` (the page scroll host). The
 // page owns itself and is gone when its window is destroyed.
+HWND CreateSessionPage(const PageContext& context, HWND parent);
 HWND CreatePaintsPage(const PageContext& context, HWND parent);
 HWND CreateSettingsPage(const PageContext& context, HWND parent);

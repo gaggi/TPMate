@@ -1,6 +1,7 @@
 #include "TrayApp.h"
 #include "StartupRegistration.h"
 #include "Resource.h"
+#include "TextConvert.h"
 
 #include <shellapi.h>
 #include <shlobj.h>
@@ -11,6 +12,7 @@
 #include <cwctype>
 #include <filesystem>
 #include <iterator>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -32,6 +34,7 @@ namespace
     constexpr UINT kMenuExit = 1004;
     constexpr UINT kMenuRefresh = 1006;
     constexpr UINT kMenuOpenFolder = 1007;
+    constexpr int kNavSession = 3000;
     constexpr int kNavPaints = 3001;
     constexpr int kNavActivity = 3002;
     constexpr int kNavSettings = 3003;
@@ -44,25 +47,6 @@ namespace
     constexpr int kPageTop = 92;
     constexpr int kMinimumWidth = 900;
     constexpr int kMinimumHeight = 600;
-
-    // iRacing session strings are not always valid UTF-8; fall back to Windows-1252 for names with umlauts.
-    std::wstring Utf8ToWide(const std::string& value)
-    {
-        if (value.empty()) return {};
-        UINT codePage = CP_UTF8;
-        DWORD flags = MB_ERR_INVALID_CHARS;
-        int count = MultiByteToWideChar(codePage, flags, value.data(), static_cast<int>(value.size()), nullptr, 0);
-        if (count <= 0)
-        {
-            codePage = 1252;
-            flags = 0;
-            count = MultiByteToWideChar(codePage, flags, value.data(), static_cast<int>(value.size()), nullptr, 0);
-        }
-        if (count <= 0) return {};
-        std::wstring result(static_cast<size_t>(count), L'\0');
-        MultiByteToWideChar(codePage, flags, value.data(), static_cast<int>(value.size()), result.data(), count);
-        return result;
-    }
 
     const wchar_t* LevelName(LogLevel level)
     {
@@ -98,27 +82,17 @@ namespace
         return std::filesystem::is_directory(root, error) && !error ? root : std::wstring{};
     }
 
-    void OpenPaintFolder(HWND owner)
-    {
-        const auto root = PaintFolder();
-        if (root.empty() || reinterpret_cast<INT_PTR>(ShellExecuteW(owner, L"open", root.c_str(), nullptr, nullptr, SW_SHOWNORMAL)) <= 32)
-            MessageBoxW(owner, L"The iRacing paints folder could not be found.", L"TPMate", MB_OK | MB_ICONINFORMATION);
-    }
-
-    void CleanIRacingPaints(HWND owner, PaintDownloader& downloader)
+    // Asks first; returns what happened, or nullopt when the user said no.
+    std::optional<std::wstring> CleanIRacingPaints(HWND owner, PaintDownloader& downloader)
     {
         const auto result = MessageBoxW(owner,
             L"Move all .tga and .mip files in the iRacing paints folder to the Recycle Bin?",
             L"Clean iRacing Paints Folder", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
-        if (result != IDYES) return;
+        if (result != IDYES) return std::nullopt;
 
         downloader.DeleteDownloadedPaints();
         const auto root = PaintFolder();
-        if (root.empty())
-        {
-            MessageBoxW(owner, L"The iRacing paints folder could not be found.", L"TPMate", MB_OK | MB_ICONINFORMATION);
-            return;
-        }
+        if (root.empty()) return L"The folder Documents\\iRacing\\paint does not exist.";
         std::error_code error;
         std::vector<std::wstring> files;
         for (std::filesystem::recursive_directory_iterator it(root, std::filesystem::directory_options::skip_permission_denied, error), end;
@@ -130,11 +104,7 @@ namespace
             std::transform(extension.begin(), extension.end(), extension.begin(), towlower);
             if (extension == L".tga" || extension == L".mip") files.push_back(it->path().wstring());
         }
-        if (files.empty())
-        {
-            MessageBoxW(owner, L"No iRacing paint files were found.", L"TPMate", MB_OK | MB_ICONINFORMATION);
-            return;
-        }
+        if (files.empty()) return L"No paint files found; nothing to clean.";
         std::wstring fileList;
         for (const auto& file : files) { fileList += file; fileList.push_back(L'\0'); }
         fileList.push_back(L'\0');
@@ -142,9 +112,8 @@ namespace
         operation.hwnd = owner; operation.wFunc = FO_DELETE; operation.pFrom = fileList.c_str();
         operation.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT;
         if (SHFileOperationW(&operation) != 0 || operation.fAnyOperationsAborted)
-            MessageBoxW(owner, L"Some paint files could not be moved to the Recycle Bin.", L"TPMate", MB_OK | MB_ICONERROR);
-        else
-            MessageBoxW(owner, L"The iRacing paints folder has been cleaned.", L"TPMate", MB_OK | MB_ICONINFORMATION);
+            return L"Some paint files could not be moved to the Recycle Bin.";
+        return L"Moved " + std::to_wstring(files.size()) + (files.size() == 1 ? L" paint file" : L" paint files") + L" to the Recycle Bin.";
     }
 
     // Shows a pick list at the cursor; returns the chosen index or -1 (as PageWindow::ChooseFromMenu).
@@ -287,6 +256,7 @@ void TrayApp::CreateControls()
             id ? reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)) : nullptr, instance_, nullptr);
     };
     navBar_.Create(instance_, window_, L"TPMate", L"Version " + UpdateChecker::CurrentVersion(), {
+        {L'\uE804', L"Session", kNavSession, true},
         {L'\uE771', L"Paints", kNavPaints, true},
         {L'\uE81C', L"Activity", kNavActivity, true},
         {L'\uE713', L"Settings", kNavSettings, true}}, headingFont_, uiFont_);
@@ -318,10 +288,12 @@ void TrayApp::ShowPage(Page page)
     const Heading heading =
         page == Page::Activity ? Heading{kNavActivity, L"Activity", L"What TPMate did since it started."} :
         page == Page::Settings ? Heading{kNavSettings, L"Settings", L"How TPMate starts and stays up to date."} :
+        page == Page::Session ? Heading{kNavSession, L"Session", L"Paints for the iRacing session you are in."} :
         Heading{kNavPaints, L"Paints", L"What TPMate downloads, for whom and when."};
     navBar_.SetSelected(heading.nav);
     SetWindowTextW(pageTitle_, heading.title);
     SetWindowTextW(pageHint_, heading.hint);
+    if (page == Page::Session) pageHost_.SetContent(CreateSessionPage(MakePageContext(), pageHost_.Handle()));
     if (page == Page::Paints) pageHost_.SetContent(CreatePaintsPage(MakePageContext(), pageHost_.Handle()));
     if (page == Page::Settings) pageHost_.SetContent(CreateSettingsPage(MakePageContext(), pageHost_.Handle()));
     if (activity)
@@ -339,12 +311,39 @@ PageContext TrayApp::MakePageContext()
     context.textFont = uiFont_;
     context.settings = &settings_;
     context.settingsChanged = [this]() { ApplySettings(); };
+    context.connected = &connected_;
+    context.progress = [this]() { std::lock_guard lock(progressMutex_); return progress_; };
+    context.openFolderMessage = &openFolderMessage_;
+    context.cleanFolderMessage = &cleanFolderMessage_;
+    context.openPaintFolder = [this]() { OpenPaintFolder(); };
+    context.cleanPaintFolder = [this]() { CleanPaintFolder(); };
     context.startWithWindows = &startWithWindows_;
     context.setStartWithWindows = [this](bool enabled) { return ApplyStartWithWindows(enabled); };
     context.update = &update_;
     context.checkForUpdates = [this]() { StartUpdateCheck(); };
     context.installUpdate = [this]() { StartUpdateInstall(); };
     return context;
+}
+
+void TrayApp::OpenPaintFolder()
+{
+    const auto root = PaintFolder();
+    openFolderMessage_.clear();
+    if (root.empty())
+        openFolderMessage_ = L"The folder does not exist yet; iRacing creates it with the first custom paint.";
+    else if (reinterpret_cast<INT_PTR>(ShellExecuteW(window_, L"open", root.c_str(), nullptr, nullptr, SW_SHOWNORMAL)) <= 32)
+        openFolderMessage_ = L"Windows could not open the folder.";
+    RefreshPage();
+}
+
+void TrayApp::CleanPaintFolder()
+{
+    if (const auto result = CleanIRacingPaints(window_, downloader_))
+    {
+        cleanFolderMessage_ = *result;
+        PostLog(LogLevel::Info, "Clean iRacing paint folder: " + WideToUtf8(*result));
+    }
+    RefreshPage();
 }
 
 void TrayApp::RefreshPage()
@@ -396,6 +395,7 @@ LRESULT TrayApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
         }
         switch (LOWORD(wParam))
         {
+        case kNavSession: ShowPage(Page::Session); return 0;
         case kNavPaints: ShowPage(Page::Paints); return 0;
         case kNavActivity: ShowPage(Page::Activity); return 0;
         case kNavSettings: ShowPage(Page::Settings); return 0;
@@ -405,13 +405,21 @@ LRESULT TrayApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
             return 0;
         case kMenuOpen: ShowStatusWindow(); return 0;
         case kMenuRefresh: RequestPaintRefresh(); return 0;
-        case kMenuOpenFolder: OpenPaintFolder(window_); return 0;
+        case kMenuOpenFolder:
+            OpenPaintFolder();
+            if (!openFolderMessage_.empty()) { ShowStatusWindow(); ShowPage(Page::Session); }
+            return 0;
         case kMenuUpdate:
             ShowStatusWindow();
             ShowPage(Page::Settings);
             StartUpdateCheck();
             return 0;
-        case kMenuClean: CleanIRacingPaints(window_, downloader_); return 0;
+        case kMenuClean:
+            // The result shows on the Session page.
+            ShowStatusWindow();
+            ShowPage(Page::Session);
+            CleanPaintFolder();
+            return 0;
         case kMenuExit:
             CaptureWindowPlacement();
             SaveSettings();
@@ -432,6 +440,7 @@ LRESULT TrayApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
     case kProgressChanged:
         progressPosted_ = false;
         UpdateStatusDisplay();
+        RefreshPage();
         return 0;
     case kUpdateCheckFinished: FinishUpdateCheck(); return 0;
     case kUpdateInstallFinished: FinishUpdateInstall(); return 0;
@@ -746,6 +755,7 @@ void TrayApp::UpdateConnection(bool connected)
     connected_ = connected;
     UpdateReloadShortcutListener();
     UpdateStatusDisplay();
+    RefreshPage();
 }
 
 void TrayApp::RequestPaintRefresh()

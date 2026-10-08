@@ -28,7 +28,7 @@ public:
     int Run(HINSTANCE instance);
 
 private:
-    enum class Page { Paints, Activity, Settings };
+    enum class Page { Session, Paints, Activity, Settings };
 
     static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam);
     void UpdateReloadShortcutListener();
@@ -59,6 +59,8 @@ private:
     void StartUpdateInstall();
     std::wstring ApplyStartWithWindows(bool enabled);
     void RefreshPage();
+    void OpenPaintFolder();
+    void CleanPaintFolder();
     void FinishUpdateInstall();
 
     HWND window_ = nullptr;
@@ -66,7 +68,7 @@ private:
     StatusPanel banner_;
     HWND pageTitle_ = nullptr;
     HWND pageHint_ = nullptr;
-    Page page_ = Page::Paints;
+    Page page_ = Page::Session;
     ScrollHost pageHost_;
     RowList activityRows_;
     HWND logEdit_ = nullptr;
@@ -96,4 +98,6 @@ private:
     UpdateCheckResult updateResult_;
     std::filesystem::path downloadedUpdate_;
     std::wstring updateError_;
+    std::wstring openFolderMessage_;
+    std::wstring cleanFolderMessage_;
 };
