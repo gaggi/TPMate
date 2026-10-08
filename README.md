@@ -6,21 +6,21 @@ A small native Windows tray application for iRacing Trading Paints. TPMate is wr
 
 - Tray icon with Open, Refresh paints, Open paint folder, Clean iRacing Paints Folder, Check for updates, and Exit commands
 - The tray tooltip shows whether TPMate is waiting, downloading, ready, or had failed downloads
-- The main window header shows the track and the player's car, how many drivers are on track, installed and failed paint files, and a progress bar while a batch downloads
-- Refresh paints re-downloads the session paints without Ctrl+R
-- DPI-aware Segoe UI layout groups Paints, Downloads, and App settings; the activity log uses a monospace font
-- The window keeps its standard size; car paint layers are indented below Cars in the vertical Paints list
+- The window uses the shared LaunchMate UI (`src/ui`, copied unchanged from LaunchMate; see LaunchMate's `docs/ui-design.md`): a sidebar with Session, Paints, Activity and Settings pages and a status banner
+- The banner shows waiting, downloading (with "34 of 96" progress) or ready, with the track, your car and failed downloads; its button refreshes the session paints without Ctrl+R
+- Session lists every driver of the roster with a pill: Not on track, Waiting, Checking, Downloading, Installed, No paint or Failed; it also opens or cleans the paint folder
+- Paints holds the toggles for Cars (expand for Numbers and Spec maps), Helmets, Suits, Only drivers on track, Ctrl+R and clean-up on exit, and a Choose... row for parallel downloads
+- Activity shows the log; Settings holds tray behavior, Start with Windows and the update check, whose result appears in the version row
+- Settings save immediately; the window is resizable and remembers its size, position and maximized state
 - Only one instance runs per Windows session; starting either executable again opens the existing window
-- Select Cars, Helmets, and Suits independently, with Numbers and Spec Maps options for Cars
 - Only download present drivers is enabled by default. It filters the historical roster using `CarIdxTrackSurface`, includes cars in pit stalls/off track, and preloads the player's own car even in the garage. Other garage cars are deferred until they appear in the world; this is a world-presence filter, not an exact server connection list.
-- Presence changes are sampled by the existing one-second monitor and automatically trigger downloads without re-parsing the session info for newly appearing drivers. Already processed drivers are remembered for the session and their paints remain installed when they disappear. Disable the checkbox to load the complete roster as before.
+- Presence changes are sampled by the existing one-second monitor and automatically trigger downloads without re-parsing the session info for newly appearing drivers. Already processed drivers are remembered for the session and their paints remain installed when they disappear. Turn the toggle off to load the complete roster.
 - If presence telemetry is missing or temporarily invalid, remote downloads wait for valid data rather than downloading the historical roster; this also applies when checking for fresh paints with Ctrl+R. Team API results are filtered to the eligible roster before asset downloads.
 - Start with Windows creates a per-user logon task; changing this option prompts for UAC once, while subsequent logons start TPMate in the tray with normal user privileges
 - Settings are saved in `%APPDATA%\TPMate\settings.ini`
 - Closing or minimizing the window hides it in the tray by default
-- The tray tooltip reflects the iRacing connection status
 - Ctrl+R re-downloads session paints when iRacing is connected, its simulator window is active, and the reload option is enabled; detection uses Raw Input (no keyboard hook), so it never delays iRacing's keyboard input, and ignores key repeats and injected keys
-- Version 0.1.0; Check for updates is available in the window and tray menu and only contacts GitHub when clicked
+- Version 0.1.0; Check for updates is available on the Settings page and in the tray menu and only contacts GitHub when clicked
 - Updates use the latest published release of `gaggi/TPMate`; install downloads the matching executable and restarts TPMate, or opens the GitHub release page
 - Runs at Low CPU priority and, where Windows supports it, in efficiency mode (EcoQoS) so iRacing keeps the performance cores; hidden log updates do not request scrolling or immediate repaints
 - While iRacing is not running, the monitor only probes for the shared memory once per second; the process list is only checked to detect the simulator exiting
