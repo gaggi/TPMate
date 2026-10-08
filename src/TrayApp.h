@@ -28,7 +28,7 @@ public:
     int Run(HINSTANCE instance);
 
 private:
-    enum class Page { Paints, Activity };
+    enum class Page { Paints, Activity, Settings };
 
     static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam);
     void UpdateReloadShortcutListener();
@@ -56,7 +56,9 @@ private:
     void RequestPaintRefresh();
     void StartUpdateCheck();
     void FinishUpdateCheck();
-    void StartUpdateInstall(UpdateReleaseInfo release);
+    void StartUpdateInstall();
+    std::wstring ApplyStartWithWindows(bool enabled);
+    void RefreshPage();
     void FinishUpdateInstall();
 
     HWND window_ = nullptr;
@@ -68,11 +70,6 @@ private:
     ScrollHost pageHost_;
     RowList activityRows_;
     HWND logEdit_ = nullptr;
-    // Until the Settings page exists, the previous App group sits below the log.
-    HWND updateButton_ = nullptr;
-    HWND appGroup_ = nullptr;
-    HWND minimizeCheck_ = nullptr;
-    HWND startupCheck_ = nullptr;
     HINSTANCE instance_ = nullptr;
     HMODULE richEditModule_ = nullptr;
     UINT dpi_ = 96;
@@ -95,7 +92,7 @@ private:
     IRacingMonitor monitor_;
     PaintDownloader downloader_;
     std::thread updateThread_;
-    bool updateBusy_ = false;
+    UpdateState update_;
     UpdateCheckResult updateResult_;
     std::filesystem::path downloadedUpdate_;
     std::wstring updateError_;

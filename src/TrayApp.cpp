@@ -32,10 +32,9 @@ namespace
     constexpr UINT kMenuExit = 1004;
     constexpr UINT kMenuRefresh = 1006;
     constexpr UINT kMenuOpenFolder = 1007;
-    constexpr int kSettingsMinimize = 2001;
-    constexpr int kStartWithWindows = 2015;
     constexpr int kNavPaints = 3001;
     constexpr int kNavActivity = 3002;
+    constexpr int kNavSettings = 3003;
     constexpr int kBannerButton = 3010;
     constexpr int kActivityRows = 3020;
 
@@ -268,7 +267,7 @@ void TrayApp::CreateFonts()
             SendMessageW(control, WM_SETFONT, static_cast<WPARAM>(font), TRUE);
             return TRUE;
         }, reinterpret_cast<LPARAM>(uiFont_));
-        for (HWND control : {pageTitle_, appGroup_})
+        for (HWND control : {pageTitle_})
             if (control) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(headingFont_), TRUE);
         if (logEdit_) SendMessageW(logEdit_, WM_SETFONT, reinterpret_cast<WPARAM>(logFont_), TRUE);
         navBar_.SetFonts(headingFont_, uiFont_);
@@ -289,7 +288,8 @@ void TrayApp::CreateControls()
     };
     navBar_.Create(instance_, window_, L"TPMate", L"Version " + UpdateChecker::CurrentVersion(), {
         {L'\uE771', L"Paints", kNavPaints, true},
-        {L'\uE81C', L"Activity", kNavActivity, true}}, headingFont_, uiFont_);
+        {L'\uE81C', L"Activity", kNavActivity, true},
+        {L'\uE713', L"Settings", kNavSettings, true}}, headingFont_, uiFont_);
     banner_.Create(instance_, window_, kBannerButton, headingFont_, uiFont_);
     pageTitle_ = control(L"STATIC", L"", SS_CENTERIMAGE | SS_ENDELLIPSIS);
     pageHint_ = control(L"STATIC", L"", SS_CENTERIMAGE | SS_ENDELLIPSIS);
@@ -303,17 +303,6 @@ void TrayApp::CreateControls()
     SendMessageW(logEdit_, EM_EXLIMITTEXT, 0, 1000000);
     RefreshActivityRows();
 
-    // Previous App group, still shown below the log.
-    updateButton_ = control(L"BUTTON", L"Check for updates", WS_TABSTOP | BS_PUSHBUTTON, kMenuUpdate);
-    appGroup_ = control(L"BUTTON", L"App", BS_GROUPBOX);
-    const auto check = [&](const wchar_t* text, int id, bool checked)
-    {
-        const HWND box = control(L"BUTTON", text, WS_TABSTOP | BS_AUTOCHECKBOX, id);
-        SendMessageW(box, BM_SETCHECK, checked ? BST_CHECKED : BST_UNCHECKED, 0);
-        return box;
-    };
-    minimizeCheck_ = check(L"Close and minimize to tray", kSettingsMinimize, settings_.minimizeToTray);
-    startupCheck_ = check(L"Start with Windows", kStartWithWindows, startWithWindows_);
     CreateFonts();
 }
 
@@ -322,17 +311,19 @@ void TrayApp::ShowPage(Page page)
     pageHost_.Clear();
     page_ = page;
     const bool activity = page == Page::Activity;
-    for (HWND control : {activityRows_.Handle(), logEdit_, appGroup_, minimizeCheck_, startupCheck_, updateButton_})
+    for (HWND control : {activityRows_.Handle(), logEdit_})
         ShowWindow(control, activity ? SW_SHOW : SW_HIDE);
     ShowWindow(pageHost_.Handle(), activity ? SW_HIDE : SW_SHOW);
     struct Heading { int nav; const wchar_t* title; const wchar_t* hint; };
-    const Heading heading = activity ?
-        Heading{kNavActivity, L"Activity", L"What TPMate did since it started."} :
+    const Heading heading =
+        page == Page::Activity ? Heading{kNavActivity, L"Activity", L"What TPMate did since it started."} :
+        page == Page::Settings ? Heading{kNavSettings, L"Settings", L"How TPMate starts and stays up to date."} :
         Heading{kNavPaints, L"Paints", L"What TPMate downloads, for whom and when."};
     navBar_.SetSelected(heading.nav);
     SetWindowTextW(pageTitle_, heading.title);
     SetWindowTextW(pageHint_, heading.hint);
     if (page == Page::Paints) pageHost_.SetContent(CreatePaintsPage(MakePageContext(), pageHost_.Handle()));
+    if (page == Page::Settings) pageHost_.SetContent(CreateSettingsPage(MakePageContext(), pageHost_.Handle()));
     if (activity)
     {
         SendMessageW(logEdit_, EM_SCROLLCARET, 0, 0);
@@ -348,7 +339,29 @@ PageContext TrayApp::MakePageContext()
     context.textFont = uiFont_;
     context.settings = &settings_;
     context.settingsChanged = [this]() { ApplySettings(); };
+    context.startWithWindows = &startWithWindows_;
+    context.setStartWithWindows = [this](bool enabled) { return ApplyStartWithWindows(enabled); };
+    context.update = &update_;
+    context.checkForUpdates = [this]() { StartUpdateCheck(); };
+    context.installUpdate = [this]() { StartUpdateInstall(); };
     return context;
+}
+
+void TrayApp::RefreshPage()
+{
+    if (const HWND page = pageHost_.Content()) SendMessageW(page, WM_TIMER, kPageRefreshTimer, 0);
+}
+
+std::wstring TrayApp::ApplyStartWithWindows(bool enabled)
+{
+    if (StartupRegistration::Apply(window_, enabled))
+    {
+        startWithWindows_ = enabled;
+        PostLog(LogLevel::Info, enabled ? "Windows startup enabled." : "Windows startup disabled.");
+        return {};
+    }
+    return GetLastError() == ERROR_CANCELLED ? L"Not changed: Windows approval was declined." :
+        L"Not changed: the logon task could not be updated.";
 }
 
 LRESULT CALLBACK TrayApp::WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
@@ -385,41 +398,24 @@ LRESULT TrayApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
         {
         case kNavPaints: ShowPage(Page::Paints); return 0;
         case kNavActivity: ShowPage(Page::Activity); return 0;
+        case kNavSettings: ShowPage(Page::Settings); return 0;
         case kBannerButton: RequestPaintRefresh(); return 0;
         case kActivityRows:
             if (HIWORD(wParam) == RowList::kButton || HIWORD(wParam) == RowList::kActivated) ChooseLogLevel();
             return 0;
-        case kStartWithWindows:
-        {
-            const bool requested = SendMessageW(startupCheck_, BM_GETCHECK, 0, 0) == BST_CHECKED;
-            if (StartupRegistration::Apply(window_, requested))
-            {
-                startWithWindows_ = requested;
-                PostLog(LogLevel::Info, requested ? "Windows startup enabled." : "Windows startup disabled.");
-            }
-            else
-            {
-                const bool cancelled = GetLastError() == ERROR_CANCELLED;
-                SendMessageW(startupCheck_, BM_SETCHECK, startWithWindows_ ? BST_CHECKED : BST_UNCHECKED, 0);
-                if (!cancelled)
-                    MessageBoxW(window_, L"Windows startup could not be changed. The previous setting was kept.",
-                        L"TPMate", MB_OK | MB_ICONERROR);
-            }
-            return 0;
-        }
         case kMenuOpen: ShowStatusWindow(); return 0;
         case kMenuRefresh: RequestPaintRefresh(); return 0;
         case kMenuOpenFolder: OpenPaintFolder(window_); return 0;
-        case kMenuUpdate: StartUpdateCheck(); return 0;
+        case kMenuUpdate:
+            ShowStatusWindow();
+            ShowPage(Page::Settings);
+            StartUpdateCheck();
+            return 0;
         case kMenuClean: CleanIRacingPaints(window_, downloader_); return 0;
         case kMenuExit:
             CaptureWindowPlacement();
             SaveSettings();
             DestroyWindow(window_);
-            return 0;
-        case kSettingsMinimize:
-            settings_.minimizeToTray = SendMessageW(minimizeCheck_, BM_GETCHECK, 0, 0) == BST_CHECKED;
-            SaveSettings();
             return 0;
         }
         break;
@@ -503,7 +499,8 @@ void TrayApp::ShowMenu()
     AppendMenuW(menu, MF_STRING, kMenuOpenFolder, L"Open paint folder");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kMenuClean, L"Clean iRacing Paints Folder...");
-    AppendMenuW(menu, MF_STRING | (updateBusy_ ? MF_GRAYED : 0), kMenuUpdate, L"Check for updates...");
+    const bool updateBusy = update_.phase == UpdateState::Phase::Checking || update_.phase == UpdateState::Phase::Downloading;
+    AppendMenuW(menu, MF_STRING | (updateBusy ? MF_GRAYED : 0), kMenuUpdate, L"Check for updates...");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr); AppendMenuW(menu, MF_STRING, kMenuExit, L"Exit");
     SetMenuDefaultItem(menu, kMenuOpen, FALSE);
     POINT point{}; GetCursorPos(&point); SetForegroundWindow(window_);
@@ -549,11 +546,10 @@ void TrayApp::RestoreWindowPlacement()
 
 void TrayApp::StartUpdateCheck()
 {
-    if (updateBusy_) return;
+    if (update_.phase == UpdateState::Phase::Checking || update_.phase == UpdateState::Phase::Downloading) return;
     if (updateThread_.joinable()) updateThread_.join();
-    updateBusy_ = true;
-    EnableWindow(updateButton_, FALSE);
-    SetWindowTextW(updateButton_, L"Checking...");
+    update_.phase = UpdateState::Phase::Checking;
+    RefreshPage();
     PostLog(LogLevel::Info, "Running manual GitHub release check for TPMate updates.");
     const HWND owner = window_;
     updateThread_ = std::thread([this, owner]()
@@ -567,55 +563,38 @@ void TrayApp::StartUpdateCheck()
 void TrayApp::FinishUpdateCheck()
 {
     if (updateThread_.joinable()) updateThread_.join();
-    updateBusy_ = false;
-    EnableWindow(updateButton_, TRUE);
-    SetWindowTextW(updateButton_, L"Check for updates");
     const auto& result = updateResult_;
-    if (result.state == UpdateCheckState::Failed)
+    update_.release = result.release;
+    update_.message = result.message;
+    switch (result.state)
     {
-        const std::wstring message = L"Current version: " + UpdateChecker::CurrentVersion() + L"\n\n" + result.message;
-        MessageBoxW(window_, message.c_str(), L"TPMate Update", MB_OK | MB_ICONWARNING);
-        return;
+    case UpdateCheckState::Failed:
+        update_.phase = UpdateState::Phase::Failed;
+        PostLog(LogLevel::Warning, "Update check failed.");
+        break;
+    case UpdateCheckState::UpToDate:
+        update_.phase = UpdateState::Phase::UpToDate;
+        if (!result.release.versionDisplay.empty())
+            update_.message = L"Latest release on GitHub: " + result.release.versionDisplay + L".";
+        PostLog(LogLevel::Info, "TPMate is up to date.");
+        break;
+    case UpdateCheckState::UpdateAvailable:
+        update_.phase = UpdateState::Phase::Available;
+        PostLog(LogLevel::Info, "A TPMate update is available.");
+        break;
     }
-    const bool available = result.state == UpdateCheckState::UpdateAvailable;
-    const std::wstring details = L"Current version: " + UpdateChecker::CurrentVersion() +
-        L"\nGitHub version: " + (result.release.versionDisplay.empty() ? L"No published release" : result.release.versionDisplay) +
-        (available ? L"\n\nA newer version is available." : L"\n\n" + result.message);
-    TASKDIALOG_BUTTON buttons[2]{};
-    unsigned count = 0;
-    const bool canInstall = available && !result.release.assetDownloadUrl.empty();
-    if (canInstall) buttons[count++] = {101, L"Install update\nDownload and restart TPMate"};
-    if (!result.release.releasePageUrl.empty()) buttons[count++] = {102, L"Open GitHub release"};
-    TASKDIALOGCONFIG dialog{sizeof(dialog)};
-    dialog.hwndParent = window_;
-    dialog.dwFlags = TDF_USE_COMMAND_LINKS | TDF_ALLOW_DIALOG_CANCELLATION | TDF_SIZE_TO_CONTENT;
-    dialog.dwCommonButtons = TDCBF_CLOSE_BUTTON;
-    dialog.pszWindowTitle = L"TPMate Update";
-    dialog.pszMainInstruction = available ? L"Update available" : L"No update available";
-    dialog.pszContent = details.c_str();
-    dialog.cButtons = count;
-    dialog.pButtons = buttons;
-    dialog.nDefaultButton = IDCLOSE;
-    int selected = IDCLOSE;
-    if (FAILED(TaskDialogIndirect(&dialog, &selected, nullptr, nullptr)))
-    {
-        MessageBoxW(window_, details.c_str(), L"TPMate Update", MB_OK | MB_ICONINFORMATION);
-        return;
-    }
-    if (selected == 101) StartUpdateInstall(result.release);
-    else if (selected == 102 && !UpdateChecker::OpenReleasePage(result.release.releasePageUrl))
-        MessageBoxW(window_, L"Could not open the GitHub release page.", L"TPMate Update", MB_OK | MB_ICONWARNING);
+    RefreshPage();
 }
 
-void TrayApp::StartUpdateInstall(UpdateReleaseInfo release)
+void TrayApp::StartUpdateInstall()
 {
-    if (updateBusy_) return;
-    updateBusy_ = true;
-    EnableWindow(updateButton_, FALSE);
-    SetWindowTextW(updateButton_, L"Downloading...");
+    if (update_.phase != UpdateState::Phase::Available || update_.release.assetDownloadUrl.empty()) return;
+    if (updateThread_.joinable()) updateThread_.join();
+    update_.phase = UpdateState::Phase::Downloading;
+    RefreshPage();
     PostLog(LogLevel::Info, "Downloading TPMate update. The application will restart after installation.");
     const HWND owner = window_;
-    updateThread_ = std::thread([this, owner, release = std::move(release)]()
+    updateThread_ = std::thread([this, owner, release = update_.release]()
     {
         updateError_.clear();
         try
@@ -631,9 +610,6 @@ void TrayApp::StartUpdateInstall(UpdateReleaseInfo release)
 void TrayApp::FinishUpdateInstall()
 {
     if (updateThread_.joinable()) updateThread_.join();
-    updateBusy_ = false;
-    EnableWindow(updateButton_, TRUE);
-    SetWindowTextW(updateButton_, L"Check for updates");
     if (updateError_.empty() && UpdateChecker::LaunchSelfUpdater(downloadedUpdate_, GetCurrentProcessId(), updateError_))
     {
         CaptureWindowPlacement();
@@ -641,7 +617,10 @@ void TrayApp::FinishUpdateInstall()
         DestroyWindow(window_);
         return;
     }
-    MessageBoxW(window_, updateError_.c_str(), L"TPMate Update", MB_OK | MB_ICONERROR);
+    update_.phase = UpdateState::Phase::Failed;
+    update_.message = updateError_;
+    PostLog(LogLevel::Warning, "The update could not be installed.");
+    RefreshPage();
 }
 
 void TrayApp::SaveSettings()
@@ -750,9 +729,8 @@ void TrayApp::LayoutControls(int width, int height)
     place(pageHost_.Handle(), left, top, content, bottom - top);
 
     // Activity page
-    const int settingsY = bottom - 120;
     place(activityRows_.Handle(), left, top, content, 62);
-    place(logEdit_, left, top + 74, content, settingsY - 12 - (top + 74));
+    place(logEdit_, left, top + 74, content, bottom - (top + 74));
     if (logEdit_)
     {
         RECT textRect{};
@@ -761,10 +739,6 @@ void TrayApp::LayoutControls(int width, int height)
         textRect.right -= px(10); textRect.bottom -= px(8);
         SendMessageW(logEdit_, EM_SETRECT, 0, reinterpret_cast<LPARAM>(&textRect));
     }
-    place(appGroup_, left, settingsY, 320, 120);
-    place(startupCheck_, left + 16, settingsY + 28, 288, 24);
-    place(minimizeCheck_, left + 16, settingsY + 54, 288, 24);
-    place(updateButton_, left + 16, settingsY + 82, 288, 30);
 }
 
 void TrayApp::UpdateConnection(bool connected)
