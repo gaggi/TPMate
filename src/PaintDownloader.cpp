@@ -63,16 +63,6 @@ namespace
         }, reinterpret_cast<LPARAM>(&context));
     }
 
-    bool PaintBelongsToDriver(const PaintFile& paint, const SessionDriver& driver)
-    {
-        const bool wearable = paint.type == PaintType::Helmet || paint.type == PaintType::Suit;
-        if (!wearable && !paint.carPath.empty() && _stricmp(paint.carPath.c_str(), driver.carPath.c_str()) != 0)
-            return false;
-        if (paint.userId > 0 && paint.userId == driver.userId)
-            return true;
-        return paint.teamId > 0 && paint.teamId == driver.teamId;
-    }
-
     std::string MinimalDiagnosticYaml(const std::string& yaml)
     {
         std::string result = "# TPMate parse-failure snapshot; names and unrelated telemetry are omitted.\r\n";
@@ -301,6 +291,8 @@ void PaintDownloader::Run()
     std::optional<SessionInfo> lastProcessedSession;
     bool parseWarningLogged = false;
     bool presenceWarningLogged = false;
+    // Session whose roster the driver list shows; a new session starts a fresh list.
+    std::wstring driverListSession;
     size_t diagnosticCount = 0;
     while (!stopping_.load())
     {
@@ -338,6 +330,7 @@ void PaintDownloader::Run()
             lastProcessedSession.reset();
             lastSessionKey.clear();
             presenceWarningLogged = false;
+            driverListSession.clear();
             ReportProgress([](PaintProgress& progress) { progress = {}; });
         }
 
@@ -385,12 +378,16 @@ void PaintDownloader::Run()
                 logCallback_(LogLevel::Info, "Waiting for valid vehicle-presence telemetry; other drivers' paints are deferred.");
             presenceWarningLogged = onlyPresent && !presentCars;
             const SessionInfo paintSession = SelectPaintDrivers(*currentSession, presentCars, onlyPresent);
+            // A refresh deletes and re-downloads everything, so every driver starts over.
+            const bool resetDrivers = forceRefresh || currentSession->Key() != driverListSession;
+            driverListSession = currentSession->Key();
             ReportProgress([&](PaintProgress& progress)
             {
                 progress.trackName = currentSession->trackName;
                 progress.carName = currentSession->playerCarName;
                 progress.selectedDrivers = paintSession.drivers.size();
                 progress.rosterDrivers = currentSession->drivers.size();
+                SyncDriverList(progress.drivers, *currentSession, paintSession, resetDrivers);
             });
             std::wstring sessionKey = paintSession.Key();
             for (const auto& driver : paintSession.drivers)
@@ -449,6 +446,8 @@ void PaintDownloader::Run()
                 // Team lookups are an aggregate API request, so query the complete roster,
                 // then keep only paints belonging to newly added or changed entries.
                 const SessionInfo& lookupSession = paintSession.teamRacing ? paintSession : affectedSession;
+                if (shouldQuery)
+                    ReportProgress([&](PaintProgress& progress) { MarkDriversChecking(progress.drivers, affectedSession.drivers); });
                 auto paints = shouldQuery ? client.FetchSessionPaints(lookupSession, stopping_, concurrency) : std::vector<PaintFile>{};
                 const unsigned int options = paintOptions_.load();
                 paints.erase(std::remove_if(paints.begin(), paints.end(), [options](const PaintFile& paint)
@@ -463,6 +462,8 @@ void PaintDownloader::Run()
                             [&](const SessionDriver& driver) { return PaintBelongsToDriver(paint, driver); }) == affectedSession.drivers.end();
                     }), paints.end());
                 }
+                if (shouldQuery)
+                    ReportProgress([&](PaintProgress& progress) { StartDriverDownloads(progress.drivers, affectedSession.drivers, paints); });
                 if (logCallback_ && !paints.empty())
                     logCallback_(LogLevel::Info, "Downloading " + std::to_string(paints.size()) + " paints with " +
                         std::to_string((std::min)(concurrency, static_cast<unsigned int>(paints.size()))) + " simultaneous downloads.");
@@ -517,6 +518,7 @@ void PaintDownloader::Run()
                                 ++progress.batchDone;
                                 progress.installedFiles += results[index].installed;
                                 progress.failedFiles += failed;
+                                RecordPaintResult(progress.drivers, paint, results[index].installed, failed);
                             });
                     }
                 };
@@ -536,8 +538,13 @@ void PaintDownloader::Run()
                         logCallback_(LogLevel::Warning, "Could not start all download workers; continuing with fewer workers.");
                     downloadWorker();
                 }
-                if (!paints.empty() && sessionGeneration_.load() == batchGeneration)
-                    ReportProgress([](PaintProgress& progress) { progress.batchDone = 0; progress.batchTotal = 0; });
+                if (sessionGeneration_.load() == batchGeneration)
+                    ReportProgress([](PaintProgress& progress)
+                    {
+                        progress.batchDone = 0;
+                        progress.batchTotal = 0;
+                        FinishDriverDownloads(progress.drivers);
+                    });
 
                 size_t installed = 0;
                 std::set<std::string> installedCars;

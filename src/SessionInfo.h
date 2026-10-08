@@ -12,6 +12,10 @@ struct SessionDriver
     int teamId = 0;
     std::string carPath;
     std::string carNumber;
+    // Display only; not part of any paint lookup or comparison.
+    std::string userName;
+    std::string teamName;
+    std::string carName;
 };
 
 struct SessionInfo

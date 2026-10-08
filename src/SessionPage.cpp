@@ -5,6 +5,7 @@
 #include "ui/RowList.h"
 
 #include <algorithm>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -22,6 +23,23 @@ namespace
     std::wstring Count(size_t value, const wchar_t* singular, const wchar_t* plural)
     {
         return std::to_wstring(value) + L" " + (value == 1 ? singular : plural);
+    }
+
+    struct StatePill { const wchar_t* text; RowList::Tone tone; };
+
+    StatePill PillFor(DriverPaintState state)
+    {
+        switch (state)
+        {
+        case DriverPaintState::NotOnTrack: return {L"Not on track", RowList::Tone::Neutral};
+        case DriverPaintState::Waiting: return {L"Waiting", RowList::Tone::Neutral};
+        case DriverPaintState::Checking: return {L"Checking", RowList::Tone::Accent};
+        case DriverPaintState::Downloading: return {L"Downloading", RowList::Tone::Accent};
+        case DriverPaintState::Installed: return {L"Installed", RowList::Tone::Active};
+        case DriverPaintState::NoPaint: return {L"No paint", RowList::Tone::Neutral};
+        case DriverPaintState::Failed: return {L"Failed", RowList::Tone::Warning};
+        }
+        return {L"", RowList::Tone::Neutral};
     }
 
     class SessionPage : public PageWindow
@@ -108,9 +126,37 @@ namespace
                         (progress.failedFiles ? L"  \u00B7  " + Count(progress.failedFiles, L"download", L"downloads") + L" failed; see Activity." : L".");
                     row.pill = progress.failedFiles ? std::to_wstring(progress.failedFiles) + L" failed" :
                         std::to_wstring(progress.installedFiles) + L" installed";
-                    row.pillTone = progress.failedFiles ? RowList::Tone::Warning : RowList::Tone::Active;
+                    row.pillTone = progress.failedFiles ? RowList::Tone::Warning :
+                        progress.installedFiles ? RowList::Tone::Active : RowList::Tone::Neutral;
                 }
                 add(std::move(row));
+            }
+        }
+
+        static void DriverRows(const PaintProgress& progress, std::vector<RowList::Row>& rows)
+        {
+            // Car names only help in multi-class sessions.
+            std::set<std::string> cars;
+            for (const auto& status : progress.drivers) cars.insert(status.driver.carName);
+            for (const auto& status : progress.drivers)
+            {
+                const auto& driver = status.driver;
+                RowList::Row row;
+                row.title = (driver.carNumber.empty() ? L"" : L"#" + Utf8ToWide(driver.carNumber) + L"  ") +
+                    (driver.userName.empty() ? L"Driver " + std::to_wstring(driver.userId) : Utf8ToWide(driver.userName));
+                std::vector<std::wstring> details;
+                if (status.player) details.push_back(L"You");
+                if (!driver.teamName.empty() && driver.teamName != driver.userName) details.push_back(Utf8ToWide(driver.teamName));
+                if (cars.size() > 1 && !driver.carName.empty()) details.push_back(Utf8ToWide(driver.carName));
+                if (status.state == DriverPaintState::Installed && status.failedFiles > 0)
+                    details.push_back(std::to_wstring(status.failedFiles) + L" of " +
+                        std::to_wstring(status.installedFiles + status.failedFiles) + L" files failed");
+                for (const auto& detail : details) row.detail += (row.detail.empty() ? L"" : L"  \u00B7  ") + detail;
+                const StatePill pill = PillFor(status.state);
+                row.pill = pill.text;
+                row.pillTone = pill.tone;
+                row.muted = status.state == DriverPaintState::NotOnTrack;
+                rows.push_back(std::move(row));
             }
         }
 
@@ -128,6 +174,12 @@ namespace
 
             header(L"Current session");
             SessionRows(rows);
+            const PaintProgress progress = context_.progress();
+            if (*context_.connected && !progress.drivers.empty())
+            {
+                header(L"Drivers");
+                DriverRows(progress, rows);
+            }
 
             header(L"Paint folder");
             {

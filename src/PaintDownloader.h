@@ -3,6 +3,7 @@
 #include "AppLog.h"
 #include "PaintStore.h"
 #include "CarPresence.h"
+#include "DriverStatus.h"
 
 #include <atomic>
 #include <condition_variable>
@@ -12,6 +13,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <vector>
 
 struct PaintProgress
 {
@@ -23,6 +25,7 @@ struct PaintProgress
     size_t batchTotal = 0; // 0 while no download batch is running.
     size_t installedFiles = 0;
     size_t failedFiles = 0;
+    std::vector<DriverStatus> drivers;
 };
 
 class PaintDownloader final

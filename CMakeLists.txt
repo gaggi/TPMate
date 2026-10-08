@@ -33,6 +33,7 @@ add_executable(TPMate WIN32
     src/TradingPaintsClient.cpp
     src/PaintStore.cpp
     src/PaintDownloader.cpp
+    src/DriverStatus.cpp
 )
 
 target_include_directories(TPMate PRIVATE src)
@@ -42,6 +43,9 @@ target_link_libraries(TPMate PRIVATE comctl32 uxtheme gdi32 shell32 winhttp xmll
 
 add_executable(TPMateUpdateTests EXCLUDE_FROM_ALL tests/UpdateCheckerTests.cpp src/JsonLite.cpp)
 add_executable(TPMateReloadTests EXCLUDE_FROM_ALL tests/ReloadShortcutTests.cpp)
+add_executable(TPMateDriverStatusTests EXCLUDE_FROM_ALL tests/DriverStatusTests.cpp src/DriverStatus.cpp src/CarPresence.cpp src/SessionInfo.cpp)
+target_include_directories(TPMateDriverStatusTests PRIVATE src)
+target_compile_definitions(TPMateDriverStatusTests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 add_executable(TPMatePresenceTests EXCLUDE_FROM_ALL tests/CarPresenceTests.cpp src/CarPresence.cpp src/SessionInfo.cpp)
 target_include_directories(TPMatePresenceTests PRIVATE src)
 target_compile_definitions(TPMatePresenceTests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
@@ -57,6 +61,8 @@ if(MSVC)
     target_compile_options(TPMateUpdateTests PRIVATE /EHsc)
     target_compile_options(TPMateReloadTests PRIVATE /EHsc)
     target_compile_options(TPMatePresenceTests PRIVATE /EHsc)
+    target_compile_options(TPMateDriverStatusTests PRIVATE /EHsc)
+    set_property(TARGET TPMateDriverStatusTests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     set_property(TARGET TPMatePresenceTests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     set_property(TARGET TPMateReloadTests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     set_property(TARGET TPMateUpdateTests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")

@@ -803,8 +803,9 @@ void TrayApp::UpdateStatusDisplay()
     else if (connected_)
     {
         tone = StatusPanel::Tone::Active;
-        title = L"Ready" + std::wstring(separator) + count(progress.installedFiles) + L" paint files for " +
-            count(drivers) + (drivers == 1 ? L" driver" : L" drivers");
+        const std::wstring driverText = count(drivers) + (drivers == 1 ? L" driver" : L" drivers");
+        title = L"Ready" + std::wstring(separator) + (progress.installedFiles ?
+            count(progress.installedFiles) + L" paint files for " + driverText : L"no paints found for " + driverText);
         detail = join({session, failed});
         tip = progress.failedFiles ? L"TPMate - " + failed + L" paint downloads" :
             L"TPMate - " + count(progress.installedFiles) + L" paint files for " + count(drivers) + L" drivers";
