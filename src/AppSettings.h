@@ -19,6 +19,7 @@ struct AppSettings
     bool loadSpecMaps = true;
     unsigned int maxConcurrentDownloads = 5;
     LogLevel logLevel = LogLevel::Info;
+    bool checkForUpdatesOnStartup = true;
 
     // Normal (restored) window rectangle in screen pixels; width 0 means not saved yet.
     int windowLeft = 0;

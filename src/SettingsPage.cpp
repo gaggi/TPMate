@@ -18,6 +18,7 @@ namespace
         None,
         MinimizeToTray,
         StartWithWindows,
+        CheckForUpdatesOnStartup,
         Version
     };
 
@@ -56,6 +57,11 @@ namespace
             if (setting == Setting::MinimizeToTray && code == RowList::kToggled)
             {
                 context_.settings->minimizeToTray = on;
+                context_.settingsChanged();
+            }
+            else if (setting == Setting::CheckForUpdatesOnStartup && code == RowList::kToggled)
+            {
+                context_.settings->checkForUpdatesOnStartup = on;
                 context_.settingsChanged();
             }
             else if (setting == Setting::StartWithWindows && code == RowList::kToggled)
@@ -155,6 +161,9 @@ namespace
             if (!startupError_.empty()) { rows.back().pill = L"Not changed"; rows.back().pillTone = RowList::Tone::Warning; }
 
             header(L"Updates");
+            toggle(Setting::CheckForUpdatesOnStartup, L"Check for updates on startup",
+                L"Asks GitHub for the latest release shortly after TPMate starts; installing stays your choice.",
+                context_.settings->checkForUpdatesOnStartup);
             rows.push_back(VersionRow());
             keys_.push_back(Setting::Version);
             list_.SetRows(std::move(rows));

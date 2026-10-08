@@ -28,6 +28,9 @@ namespace
     constexpr UINT kUpdateInstallFinished = WM_APP + 7;
     constexpr UINT kProgressChanged = WM_APP + 8;
     constexpr UINT kShowPendingPage = WM_APP + 9;
+    constexpr UINT_PTR kStartupUpdateTimer = 1;
+    // TPMate usually starts at sign-in; give the network a moment before asking GitHub.
+    constexpr UINT kStartupUpdateDelay = 20000;
     constexpr int kReloadTexturesMessage = 7;
     constexpr UINT kMenuOpen = 1001;
     constexpr UINT kMenuClean = 1003;
@@ -204,6 +207,7 @@ int TrayApp::Run(HINSTANCE instance)
     downloader_.Start(settings_.deleteAfterSession);
     monitor_.Start();
     PostMessageW(window_, kAppendLogs, 0, 0);
+    if (settings_.checkForUpdatesOnStartup) SetTimer(window_, kStartupUpdateTimer, kStartupUpdateDelay, nullptr);
 
     MSG message{};
     while (GetMessageW(&message, nullptr, 0, 0) > 0)
@@ -326,7 +330,7 @@ PageContext TrayApp::MakePageContext()
     context.startWithWindows = &startWithWindows_;
     context.setStartWithWindows = [this](bool enabled) { return ApplyStartWithWindows(enabled); };
     context.update = &update_;
-    context.checkForUpdates = [this]() { StartUpdateCheck(); };
+    context.checkForUpdates = [this]() { StartUpdateCheck(false); };
     context.installUpdate = [this]() { StartUpdateInstall(); };
     return context;
 }
@@ -425,7 +429,7 @@ LRESULT TrayApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
         case kMenuUpdate:
             ShowStatusWindow();
             ShowPage(Page::Settings);
-            StartUpdateCheck();
+            StartUpdateCheck(false);
             return 0;
         case kMenuClean:
             // The result shows on the Session page.
@@ -464,6 +468,14 @@ LRESULT TrayApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
         }
         return 0;
     case kUpdateCheckFinished: FinishUpdateCheck(); return 0;
+    case WM_TIMER:
+        if (wParam == kStartupUpdateTimer)
+        {
+            KillTimer(window_, kStartupUpdateTimer);
+            if (settings_.checkForUpdatesOnStartup) StartUpdateCheck(true);
+            return 0;
+        }
+        break;
     case kUpdateInstallFinished: FinishUpdateInstall(); return 0;
     case WM_INPUT:
         OnRawKeyboardInput(reinterpret_cast<HRAWINPUT>(lParam));
@@ -580,13 +592,17 @@ void TrayApp::RestoreWindowPlacement()
     SetWindowPlacement(window_, &placement);
 }
 
-void TrayApp::StartUpdateCheck()
+void TrayApp::StartUpdateCheck(bool startup)
 {
     if (update_.phase == UpdateState::Phase::Checking || update_.phase == UpdateState::Phase::Downloading) return;
+    // A manual check already answered the question.
+    if (startup && update_.phase != UpdateState::Phase::Idle) return;
     if (updateThread_.joinable()) updateThread_.join();
+    startupUpdateCheck_ = startup;
     update_.phase = UpdateState::Phase::Checking;
     RefreshPage();
-    PostLog(LogLevel::Info, "Running manual GitHub release check for TPMate updates.");
+    PostLog(LogLevel::Info, startup ? "Checking GitHub releases for TPMate updates." :
+        "Running manual GitHub release check for TPMate updates.");
     const HWND owner = window_;
     updateThread_ = std::thread([this, owner]()
     {
@@ -605,8 +621,9 @@ void TrayApp::FinishUpdateCheck()
     switch (result.state)
     {
     case UpdateCheckState::Failed:
-        update_.phase = UpdateState::Phase::Failed;
-        PostLog(LogLevel::Warning, "Update check failed.");
+        // A failed check at startup (no network yet) is not worth a warning.
+        update_.phase = startupUpdateCheck_ ? UpdateState::Phase::Idle : UpdateState::Phase::Failed;
+        PostLog(startupUpdateCheck_ ? LogLevel::Info : LogLevel::Warning, "Update check failed: " + WideToUtf8(result.message));
         break;
     case UpdateCheckState::UpToDate:
         update_.phase = UpdateState::Phase::UpToDate;
@@ -616,7 +633,8 @@ void TrayApp::FinishUpdateCheck()
         break;
     case UpdateCheckState::UpdateAvailable:
         update_.phase = UpdateState::Phase::Available;
-        PostLog(LogLevel::Info, "A TPMate update is available.");
+        navBar_.SetFooter(L"Update available: " + result.release.versionDisplay, true);
+        PostLog(LogLevel::Info, "TPMate update available: " + WideToUtf8(result.release.versionDisplay) + ".");
         break;
     }
     RefreshPage();

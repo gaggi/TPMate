@@ -55,7 +55,7 @@ private:
     void RefreshActivityRows();
     void ChooseLogLevel();
     void RequestPaintRefresh();
-    void StartUpdateCheck();
+    void StartUpdateCheck(bool startup);
     void FinishUpdateCheck();
     void StartUpdateInstall();
     std::wstring ApplyStartWithWindows(bool enabled);
@@ -96,6 +96,7 @@ private:
     PaintDownloader downloader_;
     std::thread updateThread_;
     UpdateState update_;
+    bool startupUpdateCheck_ = false;
     UpdateCheckResult updateResult_;
     std::filesystem::path downloadedUpdate_;
     std::wstring updateError_;

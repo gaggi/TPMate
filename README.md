@@ -20,7 +20,7 @@ A small native Windows tray application for iRacing Trading Paints. TPMate is wr
 - Settings are saved in `%APPDATA%\TPMate\settings.ini`
 - Closing or minimizing the window hides it in the tray by default
 - Ctrl+R re-downloads session paints when iRacing is connected, its simulator window is active, and the reload option is enabled; detection uses Raw Input (no keyboard hook), so it never delays iRacing's keyboard input, and ignores key repeats and injected keys
-- Version 0.1.0; Check for updates is available on the Settings page and in the tray menu and only contacts GitHub when clicked
+- Version 0.1.0; Check for updates is available on the Settings page and in the tray menu. "Check for updates on startup" (on by default) asks GitHub 20 s after TPMate starts and shows a found update in the sidebar and the Settings version row; nothing is installed without a click
 - Updates use the latest published release of `gaggi/TPMate`; install downloads the matching executable and restarts TPMate, or opens the GitHub release page
 - Runs at Low CPU priority and, where Windows supports it, in efficiency mode (EcoQoS) so iRacing keeps the performance cores; hidden log updates do not request scrolling or immediate repaints
 - While iRacing is not running, the monitor only probes for the shared memory once per second; the process list is only checked to detect the simulator exiting

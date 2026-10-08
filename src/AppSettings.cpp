@@ -57,6 +57,7 @@ AppSettings AppSettings::Load()
     const int level = ReadInt(path, L"LogLevel", static_cast<int>(LogLevel::Info));
     settings.logLevel = level < static_cast<int>(LogLevel::Verbose) || level > static_cast<int>(LogLevel::Error) ?
         LogLevel::Info : static_cast<LogLevel>(level);
+    settings.checkForUpdatesOnStartup = ReadBool(path, L"CheckForUpdatesOnStartup", true);
     settings.windowLeft = ReadInt(path, L"WindowLeft", 0);
     settings.windowTop = ReadInt(path, L"WindowTop", 0);
     settings.windowWidth = ReadInt(path, L"WindowWidth", 0);
@@ -79,6 +80,7 @@ void AppSettings::Save() const
     WriteBool(path, L"LoadSpecMaps", loadSpecMaps);
     WriteInt(path, L"MaxConcurrentDownloads", static_cast<int>(maxConcurrentDownloads));
     WriteInt(path, L"LogLevel", static_cast<int>(logLevel));
+    WriteBool(path, L"CheckForUpdatesOnStartup", checkForUpdatesOnStartup);
     if (windowWidth > 0 && windowHeight > 0)
     {
         WriteInt(path, L"WindowLeft", windowLeft);
