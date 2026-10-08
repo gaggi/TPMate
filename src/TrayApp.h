@@ -4,6 +4,7 @@
 #include "AppSettings.h"
 #include "IRacingMonitor.h"
 #include "PaintDownloader.h"
+#include "Pages.h"
 #include "UpdateChecker.h"
 #include "ReloadShortcut.h"
 #include "ui/NavBar.h"
@@ -27,7 +28,7 @@ public:
     int Run(HINSTANCE instance);
 
 private:
-    enum class Page { Activity };
+    enum class Page { Paints, Activity };
 
     static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam);
     void UpdateReloadShortcutListener();
@@ -43,7 +44,8 @@ private:
     void SaveSettings();
     void CaptureWindowPlacement();
     void RestoreWindowPlacement();
-    void ApplyPaintOptions();
+    void ApplySettings();
+    PageContext MakePageContext();
     void PostLog(LogLevel level, const std::string& message);
     void AppendQueuedLogs();
     void LayoutControls(int width, int height);
@@ -62,26 +64,15 @@ private:
     StatusPanel banner_;
     HWND pageTitle_ = nullptr;
     HWND pageHint_ = nullptr;
-    Page page_ = Page::Activity;
+    Page page_ = Page::Paints;
+    ScrollHost pageHost_;
     RowList activityRows_;
     HWND logEdit_ = nullptr;
-    // Until each setting has its page, the previous settings groups sit below the log.
+    // Until the Settings page exists, the previous App group sits below the log.
     HWND updateButton_ = nullptr;
-    HWND paintsGroup_ = nullptr;
-    HWND downloadsGroup_ = nullptr;
     HWND appGroup_ = nullptr;
     HWND minimizeCheck_ = nullptr;
-    HWND deleteCheck_ = nullptr;
-    HWND reloadCheck_ = nullptr;
-    HWND presentDriversCheck_ = nullptr;
-    HWND loadCarsCheck_ = nullptr;
-    HWND loadHelmetsCheck_ = nullptr;
-    HWND loadSuitsCheck_ = nullptr;
-    HWND loadNumbersCheck_ = nullptr;
-    HWND loadSpecMapsCheck_ = nullptr;
     HWND startupCheck_ = nullptr;
-    HWND concurrencyLabel_ = nullptr;
-    HWND concurrencyCombo_ = nullptr;
     HINSTANCE instance_ = nullptr;
     HMODULE richEditModule_ = nullptr;
     UINT dpi_ = 96;

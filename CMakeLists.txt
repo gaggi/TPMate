@@ -24,6 +24,7 @@ add_executable(TPMate WIN32
     src/StartupRegistration.cpp
     src/TrayApp.cpp
     src/AppSettings.cpp
+    src/PaintsPage.cpp
     src/IRacingMonitor.cpp
     src/CarPresence.cpp
     src/SessionInfo.cpp

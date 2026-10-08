@@ -33,17 +33,9 @@ namespace
     constexpr UINT kMenuRefresh = 1006;
     constexpr UINT kMenuOpenFolder = 1007;
     constexpr int kSettingsMinimize = 2001;
-    constexpr int kSettingsDelete = 2002;
-    constexpr int kSettingsReload = 2003;
-    constexpr int kConcurrencyCombo = 2005;
-    constexpr int kLoadCars = 2010;
-    constexpr int kLoadHelmets = 2011;
-    constexpr int kLoadSuits = 2012;
-    constexpr int kLoadNumbers = 2013;
-    constexpr int kLoadSpecMaps = 2014;
     constexpr int kStartWithWindows = 2015;
-    constexpr int kOnlyPresentDrivers = 2016;
-    constexpr int kNavActivity = 3001;
+    constexpr int kNavPaints = 3001;
+    constexpr int kNavActivity = 3002;
     constexpr int kBannerButton = 3010;
     constexpr int kActivityRows = 3020;
 
@@ -276,7 +268,7 @@ void TrayApp::CreateFonts()
             SendMessageW(control, WM_SETFONT, static_cast<WPARAM>(font), TRUE);
             return TRUE;
         }, reinterpret_cast<LPARAM>(uiFont_));
-        for (HWND control : {pageTitle_, paintsGroup_, downloadsGroup_, appGroup_})
+        for (HWND control : {pageTitle_, appGroup_})
             if (control) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(headingFont_), TRUE);
         if (logEdit_) SendMessageW(logEdit_, WM_SETFONT, reinterpret_cast<WPARAM>(logFont_), TRUE);
         navBar_.SetFonts(headingFont_, uiFont_);
@@ -296,10 +288,12 @@ void TrayApp::CreateControls()
             id ? reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)) : nullptr, instance_, nullptr);
     };
     navBar_.Create(instance_, window_, L"TPMate", L"Version " + UpdateChecker::CurrentVersion(), {
+        {L'\uE771', L"Paints", kNavPaints, true},
         {L'\uE81C', L"Activity", kNavActivity, true}}, headingFont_, uiFont_);
     banner_.Create(instance_, window_, kBannerButton, headingFont_, uiFont_);
     pageTitle_ = control(L"STATIC", L"", SS_CENTERIMAGE | SS_ENDELLIPSIS);
     pageHint_ = control(L"STATIC", L"", SS_CENTERIMAGE | SS_ENDELLIPSIS);
+    pageHost_.Create(instance_, window_);
 
     // Activity page
     activityRows_.Create(instance_, window_, kActivityRows, headingFont_, uiFont_);
@@ -309,10 +303,8 @@ void TrayApp::CreateControls()
     SendMessageW(logEdit_, EM_EXLIMITTEXT, 0, 1000000);
     RefreshActivityRows();
 
-    // Previous settings groups, still shown below the log.
+    // Previous App group, still shown below the log.
     updateButton_ = control(L"BUTTON", L"Check for updates", WS_TABSTOP | BS_PUSHBUTTON, kMenuUpdate);
-    paintsGroup_ = control(L"BUTTON", L"Paints", BS_GROUPBOX);
-    downloadsGroup_ = control(L"BUTTON", L"Downloads", BS_GROUPBOX);
     appGroup_ = control(L"BUTTON", L"App", BS_GROUPBOX);
     const auto check = [&](const wchar_t* text, int id, bool checked)
     {
@@ -321,36 +313,42 @@ void TrayApp::CreateControls()
         return box;
     };
     minimizeCheck_ = check(L"Close and minimize to tray", kSettingsMinimize, settings_.minimizeToTray);
-    deleteCheck_ = check(L"Clean up when iRacing exits", kSettingsDelete, settings_.deleteAfterSession);
-    reloadCheck_ = check(L"Ctrl+R re-downloads paints", kSettingsReload, settings_.refreshOnTextureReload);
-    presentDriversCheck_ = check(L"Only drivers on track", kOnlyPresentDrivers, settings_.onlyPresentDrivers);
-    loadCarsCheck_ = check(L"Cars", kLoadCars, settings_.loadCars);
-    loadNumbersCheck_ = check(L"Numbers", kLoadNumbers, settings_.loadNumbers);
-    loadSpecMapsCheck_ = check(L"Spec Maps", kLoadSpecMaps, settings_.loadSpecMaps);
-    loadHelmetsCheck_ = check(L"Helmets", kLoadHelmets, settings_.loadHelmets);
-    loadSuitsCheck_ = check(L"Suits", kLoadSuits, settings_.loadSuits);
     startupCheck_ = check(L"Start with Windows", kStartWithWindows, startWithWindows_);
-    EnableWindow(loadNumbersCheck_, settings_.loadCars);
-    EnableWindow(loadSpecMapsCheck_, settings_.loadCars);
-    concurrencyLabel_ = control(L"STATIC", L"Parallel downloads", SS_LEFT);
-    concurrencyCombo_ = control(L"COMBOBOX", L"", WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, kConcurrencyCombo);
-    for (unsigned int count = 1; count <= 10; ++count)
-    {
-        const auto label = std::to_wstring(count);
-        const LRESULT index = SendMessageW(concurrencyCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
-        SendMessageW(concurrencyCombo_, CB_SETITEMDATA, index, count);
-        if (count == settings_.maxConcurrentDownloads)
-            SendMessageW(concurrencyCombo_, CB_SETCURSEL, index, 0);
-    }
     CreateFonts();
 }
 
 void TrayApp::ShowPage(Page page)
 {
+    pageHost_.Clear();
     page_ = page;
-    navBar_.SetSelected(kNavActivity);
-    SetWindowTextW(pageTitle_, L"Activity");
-    SetWindowTextW(pageHint_, L"What TPMate did since it started.");
+    const bool activity = page == Page::Activity;
+    for (HWND control : {activityRows_.Handle(), logEdit_, appGroup_, minimizeCheck_, startupCheck_, updateButton_})
+        ShowWindow(control, activity ? SW_SHOW : SW_HIDE);
+    ShowWindow(pageHost_.Handle(), activity ? SW_HIDE : SW_SHOW);
+    struct Heading { int nav; const wchar_t* title; const wchar_t* hint; };
+    const Heading heading = activity ?
+        Heading{kNavActivity, L"Activity", L"What TPMate did since it started."} :
+        Heading{kNavPaints, L"Paints", L"What TPMate downloads, for whom and when."};
+    navBar_.SetSelected(heading.nav);
+    SetWindowTextW(pageTitle_, heading.title);
+    SetWindowTextW(pageHint_, heading.hint);
+    if (page == Page::Paints) pageHost_.SetContent(CreatePaintsPage(MakePageContext(), pageHost_.Handle()));
+    if (activity)
+    {
+        SendMessageW(logEdit_, EM_SCROLLCARET, 0, 0);
+        SendMessageW(logEdit_, WM_VSCROLL, SB_BOTTOM, 0);
+    }
+}
+
+PageContext TrayApp::MakePageContext()
+{
+    PageContext context;
+    context.instance = instance_;
+    context.headingFont = headingFont_;
+    context.textFont = uiFont_;
+    context.settings = &settings_;
+    context.settingsChanged = [this]() { ApplySettings(); };
+    return context;
 }
 
 LRESULT CALLBACK TrayApp::WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
@@ -385,6 +383,7 @@ LRESULT TrayApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
         }
         switch (LOWORD(wParam))
         {
+        case kNavPaints: ShowPage(Page::Paints); return 0;
         case kNavActivity: ShowPage(Page::Activity); return 0;
         case kBannerButton: RequestPaintRefresh(); return 0;
         case kActivityRows:
@@ -408,13 +407,6 @@ LRESULT TrayApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
             }
             return 0;
         }
-        case kLoadCars:
-        case kLoadHelmets:
-        case kLoadSuits:
-        case kLoadNumbers:
-        case kLoadSpecMaps:
-            ApplyPaintOptions();
-            return 0;
         case kMenuOpen: ShowStatusWindow(); return 0;
         case kMenuRefresh: RequestPaintRefresh(); return 0;
         case kMenuOpenFolder: OpenPaintFolder(window_); return 0;
@@ -428,33 +420,6 @@ LRESULT TrayApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
         case kSettingsMinimize:
             settings_.minimizeToTray = SendMessageW(minimizeCheck_, BM_GETCHECK, 0, 0) == BST_CHECKED;
             SaveSettings();
-            return 0;
-        case kSettingsDelete:
-            settings_.deleteAfterSession = SendMessageW(deleteCheck_, BM_GETCHECK, 0, 0) == BST_CHECKED;
-            SaveSettings();
-            // Applied to simulator exits without restarting the worker.
-            downloader_.SetDeleteAfterExit(settings_.deleteAfterSession);
-            return 0;
-        case kSettingsReload:
-            settings_.refreshOnTextureReload = SendMessageW(reloadCheck_, BM_GETCHECK, 0, 0) == BST_CHECKED;
-            SaveSettings();
-            downloader_.SetAutoRefreshOnReload(settings_.refreshOnTextureReload);
-            UpdateReloadShortcutListener();
-            return 0;
-        case kOnlyPresentDrivers:
-            settings_.onlyPresentDrivers = SendMessageW(presentDriversCheck_, BM_GETCHECK, 0, 0) == BST_CHECKED;
-            SaveSettings();
-            downloader_.SetOnlyPresentDrivers(settings_.onlyPresentDrivers);
-            UpdateStatusDisplay();
-            return 0;
-        }
-        if (LOWORD(wParam) == kConcurrencyCombo && HIWORD(wParam) == CBN_SELCHANGE)
-        {
-            const LRESULT selected = SendMessageW(concurrencyCombo_, CB_GETCURSEL, 0, 0);
-            const LRESULT value = selected == CB_ERR ? 5 : SendMessageW(concurrencyCombo_, CB_GETITEMDATA, selected, 0);
-            settings_.maxConcurrentDownloads = static_cast<unsigned int>((std::clamp)(static_cast<int>(value), 1, 10));
-            SaveSettings();
-            downloader_.SetMaxConcurrentDownloads(settings_.maxConcurrentDownloads);
             return 0;
         }
         break;
@@ -499,6 +464,7 @@ LRESULT TrayApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
     {
         dpi_ = HIWORD(wParam);
         CreateFonts();
+        ShowPage(page_); // Pages keep the fonts they were created with.
         const auto* rect = reinterpret_cast<const RECT*>(lParam);
         SetWindowPos(window_, nullptr, rect->left, rect->top, rect->right - rect->left, rect->bottom - rect->top,
             SWP_NOZORDER | SWP_NOACTIVATE);
@@ -684,18 +650,18 @@ void TrayApp::SaveSettings()
     settings_.Save();
 }
 
-void TrayApp::ApplyPaintOptions()
+void TrayApp::ApplySettings()
 {
-    settings_.loadCars = SendMessageW(loadCarsCheck_, BM_GETCHECK, 0, 0) == BST_CHECKED;
-    settings_.loadHelmets = SendMessageW(loadHelmetsCheck_, BM_GETCHECK, 0, 0) == BST_CHECKED;
-    settings_.loadSuits = SendMessageW(loadSuitsCheck_, BM_GETCHECK, 0, 0) == BST_CHECKED;
-    settings_.loadNumbers = SendMessageW(loadNumbersCheck_, BM_GETCHECK, 0, 0) == BST_CHECKED;
-    settings_.loadSpecMaps = SendMessageW(loadSpecMapsCheck_, BM_GETCHECK, 0, 0) == BST_CHECKED;
-    EnableWindow(loadNumbersCheck_, settings_.loadCars);
-    EnableWindow(loadSpecMapsCheck_, settings_.loadCars);
     SaveSettings();
     downloader_.SetPaintOptions(settings_.loadCars, settings_.loadHelmets, settings_.loadSuits,
         settings_.loadNumbers, settings_.loadSpecMaps);
+    downloader_.SetOnlyPresentDrivers(settings_.onlyPresentDrivers);
+    downloader_.SetMaxConcurrentDownloads(settings_.maxConcurrentDownloads);
+    downloader_.SetAutoRefreshOnReload(settings_.refreshOnTextureReload);
+    // Applied to simulator exits without restarting the worker.
+    downloader_.SetDeleteAfterExit(settings_.deleteAfterSession);
+    UpdateReloadShortcutListener();
+    UpdateStatusDisplay();
 }
 
 void TrayApp::RefreshActivityRows()
@@ -781,8 +747,10 @@ void TrayApp::LayoutControls(int width, int height)
     place(pageTitle_, left, kPageTop - 1, content, 24);
     place(pageHint_, left, kPageTop + 21, content, 20);
 
+    place(pageHost_.Handle(), left, top, content, bottom - top);
+
     // Activity page
-    const int settingsY = bottom - 176;
+    const int settingsY = bottom - 120;
     place(activityRows_.Handle(), left, top, content, 62);
     place(logEdit_, left, top + 74, content, settingsY - 12 - (top + 74));
     if (logEdit_)
@@ -793,28 +761,10 @@ void TrayApp::LayoutControls(int width, int height)
         textRect.right -= px(10); textRect.bottom -= px(8);
         SendMessageW(logEdit_, EM_SETRECT, 0, reinterpret_cast<LPARAM>(&textRect));
     }
-    const int paintsWidth = (content - 24) * 28 / 100;
-    const int downloadsWidth = (content - 24) * 42 / 100;
-    const int downloadsX = left + paintsWidth + 12;
-    const int appX = downloadsX + downloadsWidth + 12;
-    const int appWidth = left + content - appX;
-    place(paintsGroup_, left, settingsY, paintsWidth, 176);
-    place(downloadsGroup_, downloadsX, settingsY, downloadsWidth, 176);
-    place(appGroup_, appX, settingsY, appWidth, 176);
-    const int paintX = left + 16;
-    place(loadCarsCheck_, paintX, settingsY + 30, paintsWidth - 32, 24);
-    place(loadNumbersCheck_, paintX + 16, settingsY + 56, paintsWidth - 48, 24);
-    place(loadSpecMapsCheck_, paintX + 16, settingsY + 82, paintsWidth - 48, 24);
-    place(loadHelmetsCheck_, paintX, settingsY + 112, paintsWidth - 32, 24);
-    place(loadSuitsCheck_, paintX, settingsY + 140, paintsWidth - 32, 24);
-    place(presentDriversCheck_, downloadsX + 16, settingsY + 30, downloadsWidth - 32, 24);
-    place(reloadCheck_, downloadsX + 16, settingsY + 57, downloadsWidth - 32, 24);
-    place(deleteCheck_, downloadsX + 16, settingsY + 84, downloadsWidth - 32, 24);
-    place(concurrencyLabel_, downloadsX + 16, settingsY + 122, 130, 20);
-    place(concurrencyCombo_, downloadsX + 150, settingsY + 118, 80, 240);
-    place(startupCheck_, appX + 16, settingsY + 30, appWidth - 32, 24);
-    place(minimizeCheck_, appX + 16, settingsY + 57, appWidth - 32, 24);
-    place(updateButton_, appX + 16, settingsY + 128, appWidth - 32, 30);
+    place(appGroup_, left, settingsY, 320, 120);
+    place(startupCheck_, left + 16, settingsY + 28, 288, 24);
+    place(minimizeCheck_, left + 16, settingsY + 54, 288, 24);
+    place(updateButton_, left + 16, settingsY + 82, 288, 30);
 }
 
 void TrayApp::UpdateConnection(bool connected)
