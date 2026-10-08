@@ -17,6 +17,7 @@
 
 #include <atomic>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -100,4 +101,8 @@ private:
     std::wstring updateError_;
     std::wstring openFolderMessage_;
     std::wstring cleanFolderMessage_;
+    // While the clean-up question is open, page switches wait: the page that asked must
+    // outlive the message box, which keeps tray commands running.
+    bool cleanQuestionOpen_ = false;
+    std::optional<Page> pendingPage_;
 };

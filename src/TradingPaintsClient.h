@@ -34,14 +34,15 @@ public:
     ~TradingPaintsClient();
     TradingPaintsClient(const TradingPaintsClient&) = delete;
     TradingPaintsClient& operator=(const TradingPaintsClient&) = delete;
+    // failedUsers receives the users whose lookup failed (network or server errors).
     std::vector<PaintFile> FetchSessionPaints(const SessionInfo& session, const std::atomic_bool& stopping,
-        unsigned int maxConcurrency);
+        unsigned int maxConcurrency, std::vector<int>* failedUsers = nullptr);
     bool Download(const std::string& url, std::vector<unsigned char>& contents, std::string& error,
         const std::atomic_bool& stopping);
 
 private:
-    std::vector<PaintFile> FetchUserPaints(int userId, const std::atomic_bool& stopping);
-    std::vector<PaintFile> FetchTeamPaints(const SessionInfo& session, const std::atomic_bool& stopping);
+    std::vector<PaintFile> FetchUserPaints(int userId, const std::atomic_bool& stopping, bool& failed);
+    std::vector<PaintFile> FetchTeamPaints(const SessionInfo& session, const std::atomic_bool& stopping, bool& failed);
     std::vector<PaintFile> ParsePaintXml(const std::vector<unsigned char>& xml, int fallbackUserId);
     void Log(LogLevel level, const std::string& message) const;
 

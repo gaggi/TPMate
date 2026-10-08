@@ -352,7 +352,7 @@ void TradingPaintsClient::Log(LogLevel level, const std::string& message) const
 }
 
 std::vector<PaintFile> TradingPaintsClient::FetchSessionPaints(const SessionInfo& session,
-    const std::atomic_bool& stopping, unsigned int maxConcurrency)
+    const std::atomic_bool& stopping, unsigned int maxConcurrency, std::vector<int>* failedUsers)
 {
     Log(LogLevel::Info, "Checking Trading Paints for session " + std::to_string(session.sessionId) + ".");
     if (session.drivers.empty())
@@ -365,7 +365,10 @@ std::vector<PaintFile> TradingPaintsClient::FetchSessionPaints(const SessionInfo
     if (session.teamRacing)
     {
         Log(LogLevel::Verbose, "Using the Trading Paints team-session lookup.");
-        files = FetchTeamPaints(session, stopping);
+        bool failed = false;
+        files = FetchTeamPaints(session, stopping, failed);
+        if (failed && failedUsers)
+            for (const auto& driver : session.drivers) failedUsers->push_back(driver.userId);
     }
     else
     {
@@ -390,6 +393,7 @@ std::vector<PaintFile> TradingPaintsClient::FetchSessionPaints(const SessionInfo
         }
 
         std::vector<std::vector<PaintFile>> userResults(users.size());
+        std::vector<char> lookupFailed(users.size(), 0);
         std::atomic_size_t nextUser{0};
         const auto lookupWorker = [&]()
         {
@@ -407,7 +411,9 @@ std::vector<PaintFile> TradingPaintsClient::FetchSessionPaints(const SessionInfo
                 }
                 Log(LogLevel::Verbose, "Checking paints for user " + std::to_string(user.userId) +
                     (carList.empty() ? "." : " in cars " + carList + "."));
-                auto userFiles = FetchUserPaints(user.userId, stopping);
+                bool failed = false;
+                auto userFiles = FetchUserPaints(user.userId, stopping, failed);
+                lookupFailed[index] = failed ? 1 : 0;
                 for (auto& file : userFiles)
                 {
                     const bool belongsToCar = std::find_if(user.carPaths.begin(), user.carPaths.end(),
@@ -434,6 +440,9 @@ std::vector<PaintFile> TradingPaintsClient::FetchSessionPaints(const SessionInfo
             lookupWorker();
         for (auto& userFiles : userResults)
             files.insert(files.end(), std::make_move_iterator(userFiles.begin()), std::make_move_iterator(userFiles.end()));
+        if (failedUsers)
+            for (size_t index = 0; index < users.size(); ++index)
+                if (lookupFailed[index]) failedUsers->push_back(users[index].userId);
     }
 
     std::map<std::string, PaintFile> uniqueFiles;
@@ -453,13 +462,15 @@ std::vector<PaintFile> TradingPaintsClient::FetchSessionPaints(const SessionInfo
     return files;
 }
 
-std::vector<PaintFile> TradingPaintsClient::FetchUserPaints(int userId, const std::atomic_bool& stopping)
+std::vector<PaintFile> TradingPaintsClient::FetchUserPaints(int userId, const std::atomic_bool& stopping, bool& failed)
 {
     std::vector<unsigned char> response;
     std::string error;
+    failed = false;
     if (!HttpRequest(httpSession_, BuildUserUrl(userId), nullptr, response, error, stopping))
     {
-        if (!stopping.load())
+        failed = !stopping.load();
+        if (failed)
             Log(LogLevel::Warning, "Could not fetch paints for user " + std::to_string(userId) + ": " + error);
         return {};
     }
@@ -469,8 +480,9 @@ std::vector<PaintFile> TradingPaintsClient::FetchUserPaints(int userId, const st
     return paints;
 }
 
-std::vector<PaintFile> TradingPaintsClient::FetchTeamPaints(const SessionInfo& session, const std::atomic_bool& stopping)
+std::vector<PaintFile> TradingPaintsClient::FetchTeamPaints(const SessionInfo& session, const std::atomic_bool& stopping, bool& failed)
 {
+    failed = false;
     std::string list;
     for (const auto& driver : session.drivers)
     {
@@ -490,7 +502,8 @@ std::vector<PaintFile> TradingPaintsClient::FetchTeamPaints(const SessionInfo& s
     std::string error;
     if (!HttpRequest(httpSession_, kTeamEndpoint, &body, response, error, stopping))
     {
-        if (!stopping.load())
+        failed = !stopping.load();
+        if (failed)
             Log(LogLevel::Warning, "Could not fetch team paints: " + error);
         return {};
     }

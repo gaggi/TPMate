@@ -82,6 +82,10 @@ int main()
         FinishDriverDownloads(list);
         Require(Find(list, 100).state == DriverPaintState::Failed, "Nothing installed, a download failed");
 
+        MarkDriversChecking(list, {roster.drivers[3]});
+        StartDriverDownloads(list, {roster.drivers[3]}, {}, {103});
+        Require(Find(list, 103).state == DriverPaintState::Failed, "A failed lookup is not \"No paint\"");
+
         SyncDriverList(list, roster, later, true);
         Require(Find(list, 101).state == DriverPaintState::NotOnTrack && Find(list, 100).state == DriverPaintState::Waiting,
             "A refresh starts every driver over");

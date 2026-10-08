@@ -27,6 +27,7 @@ namespace
     constexpr UINT kUpdateCheckFinished = WM_APP + 6;
     constexpr UINT kUpdateInstallFinished = WM_APP + 7;
     constexpr UINT kProgressChanged = WM_APP + 8;
+    constexpr UINT kShowPendingPage = WM_APP + 9;
     constexpr int kReloadTexturesMessage = 7;
     constexpr UINT kMenuOpen = 1001;
     constexpr UINT kMenuClean = 1003;
@@ -278,6 +279,11 @@ void TrayApp::CreateControls()
 
 void TrayApp::ShowPage(Page page)
 {
+    if (cleanQuestionOpen_)
+    {
+        pendingPage_ = page;
+        return;
+    }
     pageHost_.Clear();
     page_ = page;
     const bool activity = page == Page::Activity;
@@ -338,16 +344,23 @@ void TrayApp::OpenPaintFolder()
 
 void TrayApp::CleanPaintFolder()
 {
-    if (const auto result = CleanIRacingPaints(window_, downloader_))
+    if (cleanQuestionOpen_) return;
+    cleanQuestionOpen_ = true;
+    const auto result = CleanIRacingPaints(window_, downloader_);
+    cleanQuestionOpen_ = false;
+    if (result)
     {
         cleanFolderMessage_ = *result;
         PostLog(LogLevel::Info, "Clean iRacing paint folder: " + WideToUtf8(*result));
     }
     RefreshPage();
+    if (pendingPage_) PostMessageW(window_, kShowPendingPage, 0, 0);
 }
 
 void TrayApp::RefreshPage()
 {
+    // A hidden window (the usual case while racing) refreshes its page when it is shown again.
+    if (!IsWindowVisible(window_) || IsIconic(window_)) return;
     if (const HWND page = pageHost_.Content()) SendMessageW(page, WM_TIMER, kPageRefreshTimer, 0);
 }
 
@@ -442,6 +455,14 @@ LRESULT TrayApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
         UpdateStatusDisplay();
         RefreshPage();
         return 0;
+    case kShowPendingPage:
+        if (pendingPage_ && !cleanQuestionOpen_)
+        {
+            const Page page = *pendingPage_;
+            pendingPage_.reset();
+            ShowPage(page);
+        }
+        return 0;
     case kUpdateCheckFinished: FinishUpdateCheck(); return 0;
     case kUpdateInstallFinished: FinishUpdateInstall(); return 0;
     case WM_INPUT:
@@ -456,7 +477,11 @@ LRESULT TrayApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
             CaptureWindowPlacement();
             ShowWindow(window_, SW_HIDE);
         }
-        else if (wParam != SIZE_MINIMIZED) LayoutControls(LOWORD(lParam), HIWORD(lParam));
+        else if (wParam != SIZE_MINIMIZED)
+        {
+            LayoutControls(LOWORD(lParam), HIWORD(lParam));
+            RefreshPage(); // Restored from the taskbar after updates were skipped.
+        }
         return 0;
     case WM_GETMINMAXINFO:
     {
@@ -525,6 +550,7 @@ void TrayApp::ShowStatusWindow()
     SetForegroundWindow(window_);
     SendMessageW(logEdit_, EM_SCROLLCARET, 0, 0);
     SendMessageW(logEdit_, WM_VSCROLL, SB_BOTTOM, 0);
+    RefreshPage();
 }
 
 void TrayApp::CaptureWindowPlacement()
@@ -781,7 +807,8 @@ void TrayApp::UpdateStatusDisplay()
     };
     const size_t drivers = settings_.onlyPresentDrivers ? progress.selectedDrivers : progress.rosterDrivers;
     const std::wstring session = join({Utf8ToWide(progress.trackName), Utf8ToWide(progress.carName)});
-    const std::wstring failed = progress.failedFiles ? count(progress.failedFiles) + L" failed" : L"";
+    const std::wstring failed = join({progress.failedFiles ? count(progress.failedFiles) + L" downloads failed" : L"",
+        progress.failedLookups ? count(progress.failedLookups) + L" lookups failed" : L""});
 
     StatusPanel::Tone tone = StatusPanel::Tone::Neutral;
     std::wstring title = L"Waiting for iRacing";
@@ -807,8 +834,8 @@ void TrayApp::UpdateStatusDisplay()
         title = L"Ready" + std::wstring(separator) + (progress.installedFiles ?
             count(progress.installedFiles) + L" paint files for " + driverText : L"no paints found for " + driverText);
         detail = join({session, failed});
-        tip = progress.failedFiles ? L"TPMate - " + failed + L" paint downloads" :
-            L"TPMate - " + count(progress.installedFiles) + L" paint files for " + count(drivers) + L" drivers";
+        tip = !failed.empty() ? L"TPMate - " + failed : progress.installedFiles ?
+            L"TPMate - " + count(progress.installedFiles) + L" paint files for " + driverText : L"TPMate - No paints found for " + driverText;
     }
     banner_.SetState(tone, title, detail, L"Refresh paints", connected_);
     if (tip != iconData_.szTip)

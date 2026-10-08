@@ -85,10 +85,15 @@ void MarkDriversChecking(std::vector<DriverStatus>& list, const std::vector<Sess
 }
 
 void StartDriverDownloads(std::vector<DriverStatus>& list, const std::vector<SessionDriver>& drivers,
-    const std::vector<PaintFile>& paints)
+    const std::vector<PaintFile>& paints, const std::vector<int>& failedUsers)
 {
     ForDrivers(list, drivers, [&](DriverStatus& status)
     {
+        if (std::find(failedUsers.begin(), failedUsers.end(), status.driver.userId) != failedUsers.end())
+        {
+            status.state = DriverPaintState::Failed;
+            return;
+        }
         const bool hasPaint = std::any_of(paints.begin(), paints.end(),
             [&](const PaintFile& paint) { return PaintBelongsToDriver(paint, status.driver); });
         status.state = hasPaint ? DriverPaintState::Downloading : DriverPaintState::NoPaint;

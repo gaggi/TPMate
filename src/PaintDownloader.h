@@ -25,6 +25,8 @@ struct PaintProgress
     size_t batchTotal = 0; // 0 while no download batch is running.
     size_t installedFiles = 0;
     size_t failedFiles = 0;
+    // Drivers whose Trading Paints lookup failed in this session.
+    size_t failedLookups = 0;
     std::vector<DriverStatus> drivers;
 };
 

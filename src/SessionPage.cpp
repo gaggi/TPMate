@@ -74,15 +74,14 @@ namespace
             if (index < 0 || static_cast<size_t>(index) >= actions_.size()) return true;
             if (code != RowList::kButton && code != RowList::kActivated) return true;
             const Action action = actions_[static_cast<size_t>(index)];
+            // Both refresh this page through the main window when they are done.
             if (action == Action::OpenFolder) context_.openPaintFolder();
             else if (action == Action::CleanFolder) context_.cleanPaintFolder();
-            Refresh();
             return true;
         }
 
-        void SessionRows(std::vector<RowList::Row>& rows) const
+        void SessionRows(const PaintProgress& progress, std::vector<RowList::Row>& rows) const
         {
-            const PaintProgress progress = context_.progress();
             const bool connected = *context_.connected;
             const auto add = [&](RowList::Row row) { rows.push_back(std::move(row)); };
             if (!connected || progress.rosterDrivers == 0)
@@ -122,11 +121,14 @@ namespace
                 }
                 else
                 {
-                    row.detail = Count(progress.installedFiles, L"file", L"files") + L" installed for this session" +
-                        (progress.failedFiles ? L"  \u00B7  " + Count(progress.failedFiles, L"download", L"downloads") + L" failed; see Activity." : L".");
-                    row.pill = progress.failedFiles ? std::to_wstring(progress.failedFiles) + L" failed" :
-                        std::to_wstring(progress.installedFiles) + L" installed";
-                    row.pillTone = progress.failedFiles ? RowList::Tone::Warning :
+                    const size_t problems = progress.failedFiles + progress.failedLookups;
+                    row.detail = Count(progress.installedFiles, L"file", L"files") + L" installed for this session";
+                    if (progress.failedFiles) row.detail += L"  \u00B7  " + Count(progress.failedFiles, L"download", L"downloads") + L" failed";
+                    if (progress.failedLookups) row.detail += L"  \u00B7  " + Count(progress.failedLookups, L"lookup", L"lookups") +
+                        L" failed, retried with the next session update";
+                    row.detail += problems ? L"; see Activity." : L".";
+                    row.pill = problems ? std::to_wstring(problems) + L" failed" : std::to_wstring(progress.installedFiles) + L" installed";
+                    row.pillTone = problems ? RowList::Tone::Warning :
                         progress.installedFiles ? RowList::Tone::Active : RowList::Tone::Neutral;
                 }
                 add(std::move(row));
@@ -172,9 +174,9 @@ namespace
                 rows.push_back(std::move(row));
             };
 
-            header(L"Current session");
-            SessionRows(rows);
             const PaintProgress progress = context_.progress();
+            header(L"Current session");
+            SessionRows(progress, rows);
             if (*context_.connected && !progress.drivers.empty())
             {
                 header(L"Drivers");

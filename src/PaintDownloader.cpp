@@ -411,7 +411,7 @@ void PaintDownloader::Run()
                 }
                 // Counters describe the current session; a refresh deleted the earlier files.
                 if (forceRefresh || isNewSession)
-                    ReportProgress([](PaintProgress& progress) { progress.installedFiles = 0; progress.failedFiles = 0; });
+                    ReportProgress([](PaintProgress& progress) { progress.installedFiles = 0; progress.failedFiles = 0; progress.failedLookups = 0; });
                 const unsigned int concurrency = maxConcurrentDownloads_.load();
                 if (onlyPresent && logCallback_)
                     logCallback_(LogLevel::Verbose, "Paint filter: " + std::to_string(paintSession.drivers.size()) +
@@ -448,7 +448,9 @@ void PaintDownloader::Run()
                 const SessionInfo& lookupSession = paintSession.teamRacing ? paintSession : affectedSession;
                 if (shouldQuery)
                     ReportProgress([&](PaintProgress& progress) { MarkDriversChecking(progress.drivers, affectedSession.drivers); });
-                auto paints = shouldQuery ? client.FetchSessionPaints(lookupSession, stopping_, concurrency) : std::vector<PaintFile>{};
+                std::vector<int> failedUsers;
+                auto paints = shouldQuery ? client.FetchSessionPaints(lookupSession, stopping_, concurrency, &failedUsers) :
+                    std::vector<PaintFile>{};
                 const unsigned int options = paintOptions_.load();
                 paints.erase(std::remove_if(paints.begin(), paints.end(), [options](const PaintFile& paint)
                 {
@@ -462,8 +464,27 @@ void PaintDownloader::Run()
                             [&](const SessionDriver& driver) { return PaintBelongsToDriver(paint, driver); }) == affectedSession.drivers.end();
                     }), paints.end());
                 }
+                if (!failedUsers.empty() && lastProcessedSession)
+                {
+                    // Forget drivers whose lookup failed, so the next session-info or presence
+                    // update looks them up again instead of leaving them without paints.
+                    std::erase_if(lastProcessedSession->drivers, [&](const SessionDriver& driver)
+                    {
+                        return std::find(failedUsers.begin(), failedUsers.end(), driver.userId) != failedUsers.end();
+                    });
+                    lastSessionKey.clear();
+                    if (logCallback_)
+                        logCallback_(LogLevel::Info, "Trading Paints lookups failed for " + std::to_string(failedUsers.size()) +
+                            " drivers; they are retried with the next session update.");
+                }
                 if (shouldQuery)
-                    ReportProgress([&](PaintProgress& progress) { StartDriverDownloads(progress.drivers, affectedSession.drivers, paints); });
+                    ReportProgress([&](PaintProgress& progress)
+                    {
+                        StartDriverDownloads(progress.drivers, affectedSession.drivers, paints, failedUsers);
+                        progress.failedLookups = static_cast<size_t>(std::count_if(progress.drivers.begin(), progress.drivers.end(),
+                            [](const DriverStatus& status) { return status.state == DriverPaintState::Failed && status.installedFiles == 0 &&
+                                status.failedFiles == 0; }));
+                    });
                 if (logCallback_ && !paints.empty())
                     logCallback_(LogLevel::Info, "Downloading " + std::to_string(paints.size()) + " paints with " +
                         std::to_string((std::min)(concurrency, static_cast<unsigned int>(paints.size()))) + " simultaneous downloads.");
