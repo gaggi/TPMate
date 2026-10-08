@@ -1,10 +1,15 @@
 #pragma once
 
 #include "AppLog.h"
+#include "AppSettings.h"
 #include "IRacingMonitor.h"
 #include "PaintDownloader.h"
 #include "UpdateChecker.h"
 #include "ReloadShortcut.h"
+#include "ui/NavBar.h"
+#include "ui/RowList.h"
+#include "ui/ScrollHost.h"
+#include "ui/StatusPanel.h"
 
 #include <windows.h>
 #include <shellapi.h>
@@ -22,22 +27,30 @@ public:
     int Run(HINSTANCE instance);
 
 private:
+    enum class Page { Activity };
+
     static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam);
     void UpdateReloadShortcutListener();
     void OnRawKeyboardInput(HRAWINPUT input);
     LRESULT HandleMessage(UINT message, WPARAM wParam, LPARAM lParam);
+    void CreateFonts();
+    void CreateControls();
+    void ShowPage(Page page);
     void AddTrayIcon();
     void RemoveTrayIcon();
     void ShowMenu();
     void ShowStatusWindow();
     void SaveSettings();
+    void CaptureWindowPlacement();
+    void RestoreWindowPlacement();
     void ApplyPaintOptions();
     void PostLog(LogLevel level, const std::string& message);
     void AppendQueuedLogs();
     void LayoutControls(int width, int height);
-    void UpdateFonts();
     void UpdateConnection(bool connected);
     void UpdateStatusDisplay();
+    void RefreshActivityRows();
+    void ChooseLogLevel();
     void RequestPaintRefresh();
     void StartUpdateCheck();
     void FinishUpdateCheck();
@@ -45,13 +58,15 @@ private:
     void FinishUpdateInstall();
 
     HWND window_ = nullptr;
-    HWND statusText_ = nullptr;
-    HWND detailText_ = nullptr;
-    HWND refreshButton_ = nullptr;
-    HWND progressBar_ = nullptr;
-    HWND updateButton_ = nullptr;
+    NavBar navBar_;
+    StatusPanel banner_;
+    HWND pageTitle_ = nullptr;
+    HWND pageHint_ = nullptr;
+    Page page_ = Page::Activity;
+    RowList activityRows_;
     HWND logEdit_ = nullptr;
-    HWND activityLabel_ = nullptr;
+    // Until each setting has its page, the previous settings groups sit below the log.
+    HWND updateButton_ = nullptr;
     HWND paintsGroup_ = nullptr;
     HWND downloadsGroup_ = nullptr;
     HWND appGroup_ = nullptr;
@@ -65,8 +80,6 @@ private:
     HWND loadNumbersCheck_ = nullptr;
     HWND loadSpecMapsCheck_ = nullptr;
     HWND startupCheck_ = nullptr;
-    HWND logLevelLabel_ = nullptr;
-    HWND logLevelCombo_ = nullptr;
     HWND concurrencyLabel_ = nullptr;
     HWND concurrencyCombo_ = nullptr;
     HINSTANCE instance_ = nullptr;
@@ -75,23 +88,12 @@ private:
     HFONT uiFont_ = nullptr;
     HFONT headingFont_ = nullptr;
     HFONT logFont_ = nullptr;
-    HBRUSH backgroundBrush_ = nullptr;
-    bool detailWarning_ = false;
     bool reloadShortcutListening_ = false;
     ReloadShortcut reloadShortcut_;
     UINT iracingBroadcastMessage_ = 0;
     bool connected_ = false;
-    bool minimizeToTray_ = true;
-    bool deleteAfterSession_ = true;
-    bool autoRefreshOnReload_ = true;
-    bool onlyPresentDrivers_ = true;
-    bool loadCars_ = true;
-    bool loadHelmets_ = true;
-    bool loadSuits_ = true;
-    bool loadNumbers_ = true;
-    bool loadSpecMaps_ = true;
+    AppSettings settings_;
     bool startWithWindows_ = false;
-    unsigned int maxConcurrentDownloads_ = 5;
     std::atomic<LogLevel> minimumLogLevel_{LogLevel::Info};
     NOTIFYICONDATAW iconData_{};
     std::mutex logMutex_;

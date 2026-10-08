@@ -23,6 +23,7 @@ add_executable(TPMate WIN32
     src/UpdateChecker.cpp
     src/StartupRegistration.cpp
     src/TrayApp.cpp
+    src/AppSettings.cpp
     src/IRacingMonitor.cpp
     src/CarPresence.cpp
     src/SessionInfo.cpp
@@ -34,7 +35,7 @@ add_executable(TPMate WIN32
 target_include_directories(TPMate PRIVATE src)
 target_compile_definitions(TPMate PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_definitions(TPMate PRIVATE TPMATE_VERSION="${PROJECT_VERSION}")
-target_link_libraries(TPMate PRIVATE comctl32 shell32 winhttp xmllite ole32 oleaut32 advapi32 taskschd bzip2)
+target_link_libraries(TPMate PRIVATE comctl32 uxtheme gdi32 shell32 winhttp xmllite ole32 oleaut32 advapi32 taskschd bzip2)
 
 add_executable(TPMateUpdateTests EXCLUDE_FROM_ALL tests/UpdateCheckerTests.cpp src/JsonLite.cpp)
 add_executable(TPMateReloadTests EXCLUDE_FROM_ALL tests/ReloadShortcutTests.cpp)
@@ -48,7 +49,8 @@ target_compile_definitions(TPMateUpdateTests PRIVATE UNICODE _UNICODE NOMINMAX W
 target_link_libraries(TPMateUpdateTests PRIVATE shell32 winhttp)
 
 if(MSVC)
-    target_compile_options(TPMate PRIVATE /EHsc)
+    # Sources stay ASCII (escapes for other characters); /utf-8 avoids the system code page.
+    target_compile_options(TPMate PRIVATE /EHsc /utf-8)
     target_compile_options(TPMateUpdateTests PRIVATE /EHsc)
     target_compile_options(TPMateReloadTests PRIVATE /EHsc)
     target_compile_options(TPMatePresenceTests PRIVATE /EHsc)
