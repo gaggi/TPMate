@@ -164,14 +164,18 @@ std::optional<SessionInfo> ParseSessionInfo(const std::string& yaml, std::string
     session.leagueId = GetTopInt(lines, "WeekendInfo", "LeagueID");
     session.teamRacing = GetTopInt(lines, "WeekendInfo", "TeamRacing") == 1;
     session.playerCarIndex = GetTopInt(lines, "DriverInfo", "DriverCarIdx");
+    session.trackName = GetSectionValue(lines, "WeekendInfo", "TrackDisplayName");
 
     bool inDrivers = false;
     int driversIndent = -1;
     int entryIndent = -1;
     SessionDriver current;
+    std::string currentCarName;
     bool hasDriver = false;
     const auto saveDriver = [&]()
     {
+        if (hasDriver && current.carIndex >= 0 && current.carIndex == session.playerCarIndex)
+            session.playerCarName = currentCarName;
         if (hasDriver && current.userId > 0 && SafeCarPath(current.carPath))
             session.drivers.push_back(current);
     };
@@ -195,6 +199,7 @@ std::optional<SessionInfo> ParseSessionInfo(const std::string& yaml, std::string
         {
             saveDriver();
             current = {};
+            currentCarName.clear();
             hasDriver = true;
             entryIndent = line.indent;
             const auto firstField = line.text.substr(2);
@@ -218,6 +223,9 @@ std::optional<SessionInfo> ParseSessionInfo(const std::string& yaml, std::string
         const auto carPath = Value(line.text, "CarPath");
         if (!carPath.empty())
             current.carPath.assign(carPath);
+        const auto carName = Value(line.text, "CarScreenName");
+        if (!carName.empty())
+            currentCarName.assign(carName);
         const auto carNumber = Value(line.text, "CarNumber");
         if (!carNumber.empty())
             current.carNumber.assign(carNumber);

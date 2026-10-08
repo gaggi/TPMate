@@ -24,11 +24,14 @@ namespace
     constexpr UINT kShowExistingWindow = WM_APP + 5;
     constexpr UINT kUpdateCheckFinished = WM_APP + 6;
     constexpr UINT kUpdateInstallFinished = WM_APP + 7;
+    constexpr UINT kProgressChanged = WM_APP + 8;
     constexpr int kReloadTexturesMessage = 7;
     constexpr UINT kMenuOpen = 1001;
     constexpr UINT kMenuClean = 1003;
     constexpr UINT kMenuUpdate = 1005;
     constexpr UINT kMenuExit = 1004;
+    constexpr UINT kMenuRefresh = 1006;
+    constexpr UINT kMenuOpenFolder = 1007;
     constexpr int kSettingsMinimize = 2001;
     constexpr int kSettingsDelete = 2002;
     constexpr int kSettingsReload = 2003;
@@ -55,13 +58,22 @@ namespace
 
     std::wstring SettingsPath() { return ConfigDirectory() + L"\\settings.ini"; }
 
+    // iRacing session strings are not always valid UTF-8; fall back to Windows-1252 for names with umlauts.
     std::wstring Utf8ToWide(const std::string& value)
     {
         if (value.empty()) return {};
-        const int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()), nullptr, 0);
-        if (count <= 0) return std::wstring(value.begin(), value.end());
+        UINT codePage = CP_UTF8;
+        DWORD flags = MB_ERR_INVALID_CHARS;
+        int count = MultiByteToWideChar(codePage, flags, value.data(), static_cast<int>(value.size()), nullptr, 0);
+        if (count <= 0)
+        {
+            codePage = 1252;
+            flags = 0;
+            count = MultiByteToWideChar(codePage, flags, value.data(), static_cast<int>(value.size()), nullptr, 0);
+        }
+        if (count <= 0) return {};
         std::wstring result(static_cast<size_t>(count), L'\0');
-        MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()), result.data(), count);
+        MultiByteToWideChar(codePage, flags, value.data(), static_cast<int>(value.size()), result.data(), count);
         return result;
     }
 
@@ -79,6 +91,24 @@ namespace
 
     int LogLevelValue(LogLevel level) { return static_cast<int>(level); }
 
+    // Returns an empty string when the folder does not exist.
+    std::wstring PaintFolder()
+    {
+        wchar_t documents[MAX_PATH]{};
+        if (FAILED(SHGetFolderPathW(nullptr, CSIDL_PERSONAL, nullptr, SHGFP_TYPE_CURRENT, documents)))
+            return {};
+        const std::wstring root = std::wstring(documents) + L"\\iRacing\\paint";
+        std::error_code error;
+        return std::filesystem::is_directory(root, error) && !error ? root : std::wstring{};
+    }
+
+    void OpenPaintFolder(HWND owner)
+    {
+        const auto root = PaintFolder();
+        if (root.empty() || reinterpret_cast<INT_PTR>(ShellExecuteW(owner, L"open", root.c_str(), nullptr, nullptr, SW_SHOWNORMAL)) <= 32)
+            MessageBoxW(owner, L"The iRacing paints folder could not be found.", L"TPMate", MB_OK | MB_ICONINFORMATION);
+    }
+
     void CleanIRacingPaints(HWND owner, PaintDownloader& downloader)
     {
         const auto result = MessageBoxW(owner,
@@ -87,19 +117,13 @@ namespace
         if (result != IDYES) return;
 
         downloader.DeleteDownloadedPaints();
-        wchar_t documents[MAX_PATH]{};
-        if (FAILED(SHGetFolderPathW(nullptr, CSIDL_PERSONAL, nullptr, SHGFP_TYPE_CURRENT, documents)))
-        {
-            MessageBoxW(owner, L"The iRacing paints folder could not be found.", L"TPMate", MB_OK | MB_ICONERROR);
-            return;
-        }
-        const std::wstring root = std::wstring(documents) + L"\\iRacing\\paint";
-        std::error_code error;
-        if (!std::filesystem::exists(root, error) || error)
+        const auto root = PaintFolder();
+        if (root.empty())
         {
             MessageBoxW(owner, L"The iRacing paints folder could not be found.", L"TPMate", MB_OK | MB_ICONINFORMATION);
             return;
         }
+        std::error_code error;
         std::vector<std::wstring> files;
         for (std::filesystem::recursive_directory_iterator it(root, std::filesystem::directory_options::skip_permission_denied, error), end;
              it != end; it.increment(error))
@@ -133,7 +157,13 @@ TrayApp::TrayApp()
         [this](std::optional<std::string> yaml, PresentCars cars) { downloader_.OnSessionInfo(std::move(yaml), std::move(cars)); },
         [this]() { if (window_) PostMessageW(window_, kSessionExited, 0, 0); },
         [this](LogLevel level, const std::string& message) { PostLog(level, message); }),
-      downloader_([this](LogLevel level, const std::string& message) { PostLog(level, message); })
+      downloader_([this](LogLevel level, const std::string& message) { PostLog(level, message); },
+        [this](const PaintProgress& progress)
+        {
+            { std::lock_guard lock(progressMutex_); progress_ = progress; }
+            // Coalesce bursts of progress updates into one repaint.
+            if (!progressPosted_.exchange(true) && window_) PostMessageW(window_, kProgressChanged, 0, 0);
+        })
 {}
 
 int TrayApp::Run(HINSTANCE instance)
@@ -170,6 +200,8 @@ int TrayApp::Run(HINSTANCE instance)
     else
         PostLog(LogLevel::Warning, "Could not set TPMate CPU priority to Low (Windows error " +
             std::to_string(GetLastError()) + ").");
+    const INITCOMMONCONTROLSEX commonControls{sizeof(commonControls), ICC_PROGRESS_CLASS};
+    InitCommonControlsEx(&commonControls);
     richEditModule_ = LoadLibraryW(L"Msftedit.dll");
     if (!richEditModule_)
         return 1;
@@ -191,25 +223,31 @@ int TrayApp::Run(HINSTANCE instance)
     if (!window_) return 1;
     statusText_ = CreateWindowExW(0, L"STATIC", L"Waiting for iRacing...", WS_CHILD | WS_VISIBLE | SS_LEFT,
         12, 10, 770, 28, window_, nullptr, instance_, nullptr);
+    detailText_ = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT | SS_ENDELLIPSIS,
+        0, 0, 100, 20, window_, nullptr, instance_, nullptr);
+    refreshButton_ = CreateWindowExW(0, L"BUTTON", L"Refresh paints", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+        0, 0, 100, 28, window_, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kMenuRefresh)), instance_, nullptr);
+    progressBar_ = CreateWindowExW(0, PROGRESS_CLASSW, L"", WS_CHILD,
+        0, 0, 100, 10, window_, nullptr, instance_, nullptr);
     updateButton_ = CreateWindowExW(0, L"BUTTON", L"Check for updates", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
         630, 8, 154, 28, window_, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kMenuUpdate)), instance_, nullptr);
     paintsGroup_ = CreateWindowExW(0, L"BUTTON", L"Paints", WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
         0, 0, 100, 100, window_, nullptr, instance_, nullptr);
-    behaviorGroup_ = CreateWindowExW(0, L"BUTTON", L"Behavior", WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
+    downloadsGroup_ = CreateWindowExW(0, L"BUTTON", L"Downloads", WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
         0, 0, 100, 100, window_, nullptr, instance_, nullptr);
-    downloadsGroup_ = CreateWindowExW(0, L"BUTTON", L"Downloads && logging", WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
+    appGroup_ = CreateWindowExW(0, L"BUTTON", L"App", WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
         0, 0, 100, 100, window_, nullptr, instance_, nullptr);
     activityLabel_ = CreateWindowExW(0, L"STATIC", L"Activity", WS_CHILD | WS_VISIBLE,
         0, 0, 100, 24, window_, nullptr, instance_, nullptr);
     logEdit_ = CreateWindowExW(0, L"RICHEDIT50W", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | WS_VSCROLL |
         ES_LEFT | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY, 12, 44, 770, 510, window_, nullptr, instance_, nullptr);
-    minimizeCheck_ = CreateWindowExW(0, L"BUTTON", L"Close / minimize to tray", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+    minimizeCheck_ = CreateWindowExW(0, L"BUTTON", L"Close and minimize to tray", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
         12, 562, 360, 24, window_, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kSettingsMinimize)), instance_, nullptr);
-    deleteCheck_ = CreateWindowExW(0, L"BUTTON", L"Clean downloaded paints on iRacing exit", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+    deleteCheck_ = CreateWindowExW(0, L"BUTTON", L"Clean up when iRacing exits", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
         390, 562, 390, 24, window_, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kSettingsDelete)), instance_, nullptr);
-    reloadCheck_ = CreateWindowExW(0, L"BUTTON", L"Re-download paints on Ctrl+R", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+    reloadCheck_ = CreateWindowExW(0, L"BUTTON", L"Ctrl+R re-downloads paints", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
         12, 590, 490, 24, window_, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kSettingsReload)), instance_, nullptr);
-    presentDriversCheck_ = CreateWindowExW(0, L"BUTTON", L"Only download present drivers", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+    presentDriversCheck_ = CreateWindowExW(0, L"BUTTON", L"Only drivers on track", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
         0, 0, 300, 24, window_, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kOnlyPresentDrivers)), instance_, nullptr);
     logLevelLabel_ = CreateWindowExW(0, L"STATIC", L"Log level", WS_CHILD | WS_VISIBLE | SS_LEFT,
         536, 590, 82, 24, window_, nullptr, instance_, nullptr);
@@ -272,6 +310,7 @@ int TrayApp::Run(HINSTANCE instance)
     LayoutControls(clientRect.right, clientRect.bottom);
 
     AddTrayIcon();
+    UpdateStatusDisplay();
     iracingBroadcastMessage_ = RegisterWindowMessageW(L"IRSDK_BROADCASTMSG");
     downloader_.SetAutoRefreshOnReload(autoRefreshOnReload_);
     downloader_.SetOnlyPresentDrivers(onlyPresentDrivers_);
@@ -352,6 +391,8 @@ LRESULT TrayApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
             ApplyPaintOptions();
             return 0;
         case kMenuOpen: ShowStatusWindow(); return 0;
+        case kMenuRefresh: RequestPaintRefresh(); return 0;
+        case kMenuOpenFolder: OpenPaintFolder(window_); return 0;
         case kMenuUpdate: StartUpdateCheck(); return 0;
         case kMenuClean: CleanIRacingPaints(window_, downloader_); return 0;
         case kMenuExit: DestroyWindow(window_); return 0;
@@ -403,6 +444,10 @@ LRESULT TrayApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
     case kShowExistingWindow: ShowStatusWindow(); return 0;
     case kConnectionChanged: UpdateConnection(wParam != 0); return 0;
     case kAppendLogs: AppendQueuedLogs(); return 0;
+    case kProgressChanged:
+        progressPosted_ = false;
+        UpdateStatusDisplay();
+        return 0;
     case kUpdateCheckFinished: FinishUpdateCheck(); return 0;
     case kUpdateInstallFinished: FinishUpdateInstall(); return 0;
     case WM_INPUT:
@@ -436,7 +481,8 @@ LRESULT TrayApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
     case WM_CTLCOLORSTATIC:
     case WM_CTLCOLORBTN:
         SetBkMode(reinterpret_cast<HDC>(wParam), TRANSPARENT);
-        SetTextColor(reinterpret_cast<HDC>(wParam), RGB(40, 47, 58));
+        SetTextColor(reinterpret_cast<HDC>(wParam), reinterpret_cast<HWND>(lParam) != detailText_ ? RGB(40, 47, 58) :
+            detailWarning_ ? RGB(150, 90, 0) : RGB(96, 104, 115));
         return reinterpret_cast<LRESULT>(backgroundBrush_);
     case WM_CTLCOLOREDIT:
         SetTextColor(reinterpret_cast<HDC>(wParam), RGB(0, 0, 0));
@@ -469,9 +515,13 @@ void TrayApp::ShowMenu()
 {
     HMENU menu = CreatePopupMenu(); if (!menu) return;
     AppendMenuW(menu, MF_STRING, kMenuOpen, L"Open");
+    AppendMenuW(menu, MF_STRING | (connected_ ? 0 : MF_GRAYED), kMenuRefresh, L"Refresh paints");
+    AppendMenuW(menu, MF_STRING, kMenuOpenFolder, L"Open paint folder");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kMenuClean, L"Clean iRacing Paints Folder...");
     AppendMenuW(menu, MF_STRING | (updateBusy_ ? MF_GRAYED : 0), kMenuUpdate, L"Check for updates...");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr); AppendMenuW(menu, MF_STRING, kMenuExit, L"Exit");
+    SetMenuDefaultItem(menu, kMenuOpen, FALSE);
     POINT point{}; GetCursorPos(&point); SetForegroundWindow(window_);
     const UINT command = static_cast<UINT>(TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD, point.x, point.y, 0, window_, nullptr));
     PostMessageW(window_, WM_NULL, 0, 0); DestroyMenu(menu);
@@ -671,17 +721,19 @@ void TrayApp::LayoutControls(int width, int height)
     const int content = logicalWidth - 40;
     const int settingsY = logicalHeight - 196;
     const int paintsWidth = (content - 24) * 28 / 100;
-    const int behaviorWidth = (content - 24) * 42 / 100;
-    const int behaviorX = 20 + paintsWidth + 12;
-    const int downloadsX = behaviorX + behaviorWidth + 12;
-    const int downloadsWidth = logicalWidth - 20 - downloadsX;
+    const int downloadsWidth = (content - 24) * 42 / 100;
+    const int downloadsX = 20 + paintsWidth + 12;
+    const int appX = downloadsX + downloadsWidth + 12;
+    const int appWidth = logicalWidth - 20 - appX;
     const auto place = [&](HWND control, int x, int y, int w, int h)
     { if (control) MoveWindow(control, px(x), px(y), px(w), px(h), TRUE); };
 
-    place(statusText_, 20, 26, content - 180, 24);
-    place(updateButton_, logicalWidth - 180, 18, 160, 32);
-    place(activityLabel_, 20, 66, content, 22);
-    place(logEdit_, 20, 92, content, settingsY - 108);
+    place(statusText_, 20, 16, content - 180, 24);
+    place(detailText_, 20, 42, content - 180, 20);
+    place(refreshButton_, logicalWidth - 180, 20, 160, 32);
+    place(activityLabel_, 20, 72, 120, 22);
+    place(progressBar_, logicalWidth - 300, 78, 280, 10);
+    place(logEdit_, 20, 98, content, settingsY - 114);
     if (logEdit_)
     {
         RECT textRect{};
@@ -691,23 +743,24 @@ void TrayApp::LayoutControls(int width, int height)
         SendMessageW(logEdit_, EM_SETRECT, 0, reinterpret_cast<LPARAM>(&textRect));
     }
     place(paintsGroup_, 20, settingsY, paintsWidth, 176);
-    place(behaviorGroup_, behaviorX, settingsY, behaviorWidth, 176);
     place(downloadsGroup_, downloadsX, settingsY, downloadsWidth, 176);
+    place(appGroup_, appX, settingsY, appWidth, 176);
     const int paintX = 36;
     place(loadCarsCheck_, paintX, settingsY + 30, paintsWidth - 32, 24);
     place(loadNumbersCheck_, paintX + 16, settingsY + 56, paintsWidth - 48, 24);
     place(loadSpecMapsCheck_, paintX + 16, settingsY + 82, paintsWidth - 48, 24);
     place(loadHelmetsCheck_, paintX, settingsY + 112, paintsWidth - 32, 24);
     place(loadSuitsCheck_, paintX, settingsY + 140, paintsWidth - 32, 24);
-    place(minimizeCheck_, behaviorX + 16, settingsY + 30, behaviorWidth - 32, 24);
-    place(startupCheck_, behaviorX + 16, settingsY + 57, behaviorWidth - 32, 24);
-    place(deleteCheck_, behaviorX + 16, settingsY + 84, behaviorWidth - 32, 24);
-    place(reloadCheck_, behaviorX + 16, settingsY + 111, behaviorWidth - 32, 24);
-    place(presentDriversCheck_, behaviorX + 16, settingsY + 138, behaviorWidth - 32, 24);
-    place(logLevelLabel_, downloadsX + 16, settingsY + 28, downloadsWidth - 32, 20);
-    place(logLevelCombo_, downloadsX + 16, settingsY + 50, downloadsWidth - 32, 180);
-    place(concurrencyLabel_, downloadsX + 16, settingsY + 96, downloadsWidth - 32, 20);
-    place(concurrencyCombo_, downloadsX + 16, settingsY + 118, downloadsWidth - 32, 240);
+    place(presentDriversCheck_, downloadsX + 16, settingsY + 30, downloadsWidth - 32, 24);
+    place(reloadCheck_, downloadsX + 16, settingsY + 57, downloadsWidth - 32, 24);
+    place(deleteCheck_, downloadsX + 16, settingsY + 84, downloadsWidth - 32, 24);
+    place(concurrencyLabel_, downloadsX + 16, settingsY + 122, 130, 20);
+    place(concurrencyCombo_, downloadsX + 150, settingsY + 118, 80, 240);
+    place(startupCheck_, appX + 16, settingsY + 30, appWidth - 32, 24);
+    place(minimizeCheck_, appX + 16, settingsY + 57, appWidth - 32, 24);
+    place(logLevelLabel_, appX + 16, settingsY + 92, 70, 20);
+    place(logLevelCombo_, appX + 90, settingsY + 88, appWidth - 106, 180);
+    place(updateButton_, appX + 16, settingsY + 128, appWidth - 32, 30);
 }
 
 void TrayApp::UpdateFonts()
@@ -719,11 +772,11 @@ void TrayApp::UpdateFonts()
     uiFont_ = create(L"Segoe UI", 9, FW_NORMAL);
     headingFont_ = create(L"Segoe UI", 10, FW_SEMIBOLD);
     logFont_ = create(L"Consolas", 9, FW_NORMAL);
-    for (HWND control : {updateButton_, minimizeCheck_, deleteCheck_, reloadCheck_, presentDriversCheck_, loadCarsCheck_, loadHelmetsCheck_,
+    for (HWND control : {updateButton_, refreshButton_, detailText_, minimizeCheck_, deleteCheck_, reloadCheck_, presentDriversCheck_, loadCarsCheck_, loadHelmetsCheck_,
         loadSuitsCheck_, loadNumbersCheck_, loadSpecMapsCheck_, startupCheck_, logLevelLabel_, logLevelCombo_,
         concurrencyLabel_, concurrencyCombo_})
         if (control) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont_), TRUE);
-    for (HWND control : {statusText_, activityLabel_, paintsGroup_, behaviorGroup_, downloadsGroup_})
+    for (HWND control : {statusText_, activityLabel_, paintsGroup_, downloadsGroup_, appGroup_})
         if (control) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(headingFont_), TRUE);
     if (logEdit_) SendMessageW(logEdit_, WM_SETFONT, reinterpret_cast<WPARAM>(logFont_), TRUE);
     for (HWND control : {logLevelCombo_, concurrencyCombo_})
@@ -739,9 +792,83 @@ void TrayApp::UpdateConnection(bool connected)
 {
     connected_ = connected;
     UpdateReloadShortcutListener();
-    SetWindowTextW(statusText_, connected_ ? L"Connected to iRacing." : L"Waiting for iRacing...");
-    wcscpy_s(iconData_.szTip, connected_ ? L"TPMate - Connected to iRacing" : L"TPMate - Waiting for iRacing");
-    iconData_.uFlags = NIF_TIP | NIF_SHOWTIP; Shell_NotifyIconW(NIM_MODIFY, &iconData_);
+    UpdateStatusDisplay();
+}
+
+void TrayApp::RequestPaintRefresh()
+{
+    if (!connected_)
+        return;
+    PostLog(LogLevel::Info, "Manual paint refresh requested.");
+    downloader_.RequestRefresh();
+}
+
+void TrayApp::UpdateStatusDisplay()
+{
+    PaintProgress progress;
+    { std::lock_guard lock(progressMutex_); progress = progress_; }
+    const auto count = [](size_t value) { return std::to_wstring(value); };
+    constexpr wchar_t separator[] = L" \u00B7 ";
+
+    std::wstring status = L"Waiting for iRacing...";
+    std::wstring detail = L"Paints are downloaded automatically when you join a session.";
+    std::wstring tip = L"TPMate - Waiting for iRacing";
+    if (connected_)
+    {
+        status = L"Connected to iRacing";
+        if (!progress.trackName.empty()) status += separator + Utf8ToWide(progress.trackName);
+        if (!progress.carName.empty()) status += separator + Utf8ToWide(progress.carName);
+        tip = L"TPMate - Connected to iRacing";
+        if (progress.batchTotal > 0)
+        {
+            detail = L"Downloading paints: " + count(progress.batchDone) + L" of " + count(progress.batchTotal);
+            tip = L"TPMate - Downloading " + count(progress.batchDone) + L" of " + count(progress.batchTotal) + L" paints";
+        }
+        else if (progress.rosterDrivers == 0)
+            detail = L"Waiting for session info...";
+        else
+        {
+            detail = onlyPresentDrivers_ ?
+                count(progress.selectedDrivers) + L" of " + count(progress.rosterDrivers) + L" drivers on track" :
+                count(progress.rosterDrivers) + L" drivers";
+            detail += separator + count(progress.installedFiles) + L" paint files installed";
+            if (progress.installedFiles > 0)
+                tip = L"TPMate - " + count(progress.installedFiles) + L" paint files for " +
+                    count(onlyPresentDrivers_ ? progress.selectedDrivers : progress.rosterDrivers) + L" drivers";
+        }
+        if (progress.failedFiles > 0 && progress.batchTotal == 0)
+        {
+            detail += separator + count(progress.failedFiles) + L" failed";
+            tip = L"TPMate - " + count(progress.failedFiles) + L" paint downloads failed";
+        }
+    }
+    detailWarning_ = connected_ && progress.failedFiles > 0;
+    SetWindowTextW(statusText_, status.c_str());
+    SetWindowTextW(detailText_, detail.c_str());
+    // Static controls with a transparent background need their parent area repainted.
+    for (HWND text : {statusText_, detailText_})
+    {
+        RECT area{};
+        GetWindowRect(text, &area);
+        MapWindowPoints(nullptr, window_, reinterpret_cast<POINT*>(&area), 2);
+        InvalidateRect(window_, &area, TRUE);
+    }
+    EnableWindow(refreshButton_, connected_);
+    if (connected_ && progress.batchTotal > 0)
+    {
+        SendMessageW(progressBar_, PBM_SETRANGE32, 0, static_cast<LPARAM>(progress.batchTotal));
+        SendMessageW(progressBar_, PBM_SETPOS, progress.batchDone, 0);
+        ShowWindow(progressBar_, SW_SHOWNA);
+    }
+    else
+        ShowWindow(progressBar_, SW_HIDE);
+
+    if (tip != iconData_.szTip)
+    {
+        wcsncpy_s(iconData_.szTip, tip.c_str(), _TRUNCATE);
+        iconData_.uFlags = NIF_TIP | NIF_SHOWTIP;
+        Shell_NotifyIconW(NIM_MODIFY, &iconData_);
+    }
 }
 
 void TrayApp::UpdateReloadShortcutListener()

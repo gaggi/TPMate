@@ -37,6 +37,8 @@ private:
     void LayoutControls(int width, int height);
     void UpdateFonts();
     void UpdateConnection(bool connected);
+    void UpdateStatusDisplay();
+    void RequestPaintRefresh();
     void StartUpdateCheck();
     void FinishUpdateCheck();
     void StartUpdateInstall(UpdateReleaseInfo release);
@@ -44,12 +46,15 @@ private:
 
     HWND window_ = nullptr;
     HWND statusText_ = nullptr;
+    HWND detailText_ = nullptr;
+    HWND refreshButton_ = nullptr;
+    HWND progressBar_ = nullptr;
     HWND updateButton_ = nullptr;
     HWND logEdit_ = nullptr;
     HWND activityLabel_ = nullptr;
     HWND paintsGroup_ = nullptr;
-    HWND behaviorGroup_ = nullptr;
     HWND downloadsGroup_ = nullptr;
+    HWND appGroup_ = nullptr;
     HWND minimizeCheck_ = nullptr;
     HWND deleteCheck_ = nullptr;
     HWND reloadCheck_ = nullptr;
@@ -71,6 +76,7 @@ private:
     HFONT headingFont_ = nullptr;
     HFONT logFont_ = nullptr;
     HBRUSH backgroundBrush_ = nullptr;
+    bool detailWarning_ = false;
     bool reloadShortcutListening_ = false;
     ReloadShortcut reloadShortcut_;
     UINT iracingBroadcastMessage_ = 0;
@@ -90,6 +96,9 @@ private:
     NOTIFYICONDATAW iconData_{};
     std::mutex logMutex_;
     std::vector<std::wstring> pendingLogs_;
+    std::mutex progressMutex_;
+    PaintProgress progress_;
+    std::atomic_bool progressPosted_{false};
     IRacingMonitor monitor_;
     PaintDownloader downloader_;
     std::thread updateThread_;

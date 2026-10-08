@@ -22,6 +22,8 @@ struct SessionInfo
     int leagueId = 0;
     int playerCarIndex = -1;
     bool teamRacing = false;
+    std::string trackName;
+    std::string playerCarName;
     std::vector<SessionDriver> drivers;
 
     std::wstring Key() const;

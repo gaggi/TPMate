@@ -6,16 +6,31 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <functional>
 #include <windows.h>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
 
+struct PaintProgress
+{
+    std::string trackName;
+    std::string carName;
+    size_t selectedDrivers = 0;
+    size_t rosterDrivers = 0;
+    size_t batchDone = 0;
+    size_t batchTotal = 0; // 0 while no download batch is running.
+    size_t installedFiles = 0;
+    size_t failedFiles = 0;
+};
+
 class PaintDownloader final
 {
 public:
-    explicit PaintDownloader(LogCallback logCallback);
+    using ProgressCallback = std::function<void(const PaintProgress& progress)>;
+
+    PaintDownloader(LogCallback logCallback, ProgressCallback progressCallback);
     ~PaintDownloader();
     void Start(bool deleteAfterExit);
     void SetDeleteAfterExit(bool enabled);
@@ -28,11 +43,16 @@ public:
     void OnSessionInfo(std::optional<std::string> yaml, PresentCars presentCars);
     void OnSimulatorExit();
     void OnIRacingTextureReload();
+    void RequestRefresh();
     bool DeleteDownloadedPaints();
 
 private:
     void Run();
+    template<class Update> void ReportProgress(Update update);
     LogCallback logCallback_;
+    ProgressCallback progressCallback_;
+    std::mutex progressMutex_;
+    PaintProgress progress_;
     PaintStore store_;
     std::atomic_bool stopping_{false};
     std::atomic_bool deleteAfterExit_{true};

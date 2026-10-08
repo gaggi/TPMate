@@ -4,9 +4,11 @@ A small native Windows tray application for iRacing Trading Paints. TPMate is wr
 
 ## Current features
 
-- Tray icon with Open, Clean iRacing Paints Folder, and Exit commands
-- Main window shows iRacing connection status, logs, and settings
-- DPI-aware Segoe UI layout groups Paints, Behavior, and Downloads & logging; the activity log uses a monospace font
+- Tray icon with Open, Refresh paints, Open paint folder, Clean iRacing Paints Folder, Check for updates, and Exit commands
+- The tray tooltip shows whether TPMate is waiting, downloading, ready, or had failed downloads
+- The main window header shows the track and the player's car, how many drivers are on track, installed and failed paint files, and a progress bar while a batch downloads
+- Refresh paints re-downloads the session paints without Ctrl+R
+- DPI-aware Segoe UI layout groups Paints, Downloads, and App settings; the activity log uses a monospace font
 - The window keeps its standard size; car paint layers are indented below Cars in the vertical Paints list
 - Only one instance runs per Windows session; starting either executable again opens the existing window
 - Select Cars, Helmets, and Suits independently, with Numbers and Spec Maps options for Cars

@@ -175,9 +175,21 @@ namespace
     }
 }
 
-PaintDownloader::PaintDownloader(LogCallback logCallback)
-    : logCallback_(std::move(logCallback)), store_(logCallback_)
+PaintDownloader::PaintDownloader(LogCallback logCallback, ProgressCallback progressCallback)
+    : logCallback_(std::move(logCallback)), progressCallback_(std::move(progressCallback)), store_(logCallback_)
 {}
+
+template<class Update> void PaintDownloader::ReportProgress(Update update)
+{
+    PaintProgress snapshot;
+    {
+        std::lock_guard lock(progressMutex_);
+        update(progress_);
+        snapshot = progress_;
+    }
+    if (progressCallback_)
+        progressCallback_(snapshot);
+}
 
 PaintDownloader::~PaintDownloader() { Stop(); }
 
@@ -263,8 +275,12 @@ void PaintDownloader::OnSimulatorExit()
 
 void PaintDownloader::OnIRacingTextureReload()
 {
-    if (!autoRefreshOnReload_.load())
-        return;
+    if (autoRefreshOnReload_.load())
+        RequestRefresh();
+}
+
+void PaintDownloader::RequestRefresh()
+{
     std::lock_guard lock(mutex_);
     forceRefresh_ = true;
     workAvailable_.notify_one();
@@ -322,6 +338,7 @@ void PaintDownloader::Run()
             lastProcessedSession.reset();
             lastSessionKey.clear();
             presenceWarningLogged = false;
+            ReportProgress([](PaintProgress& progress) { progress = {}; });
         }
 
         bool parsedSessionInfo = false;
@@ -368,6 +385,13 @@ void PaintDownloader::Run()
                 logCallback_(LogLevel::Info, "Waiting for valid vehicle-presence telemetry; other drivers' paints are deferred.");
             presenceWarningLogged = onlyPresent && !presentCars;
             const SessionInfo paintSession = SelectPaintDrivers(*currentSession, presentCars, onlyPresent);
+            ReportProgress([&](PaintProgress& progress)
+            {
+                progress.trackName = currentSession->trackName;
+                progress.carName = currentSession->playerCarName;
+                progress.selectedDrivers = paintSession.drivers.size();
+                progress.rosterDrivers = currentSession->drivers.size();
+            });
             std::wstring sessionKey = paintSession.Key();
             for (const auto& driver : paintSession.drivers)
                 sessionKey += L"|" + std::to_wstring(driver.carIndex) + L":" +
@@ -384,10 +408,13 @@ void PaintDownloader::Run()
                 if (forceRefresh)
                 {
                     if (logCallback_)
-                        logCallback_(LogLevel::Info, "iRacing requested a texture reload; refreshing session paints.");
+                        logCallback_(LogLevel::Info, "Refreshing session paints.");
                     if (!store_.DeleteDownloadedPaints() && logCallback_)
                         logCallback_(LogLevel::Warning, "Some downloaded paints could not be deleted before refresh.");
                 }
+                // Counters describe the current session; a refresh deleted the earlier files.
+                if (forceRefresh || isNewSession)
+                    ReportProgress([](PaintProgress& progress) { progress.installedFiles = 0; progress.failedFiles = 0; });
                 const unsigned int concurrency = maxConcurrentDownloads_.load();
                 if (onlyPresent && logCallback_)
                     logCallback_(LogLevel::Verbose, "Paint filter: " + std::to_string(paintSession.drivers.size()) +
@@ -442,6 +469,8 @@ void PaintDownloader::Run()
 
                 struct DownloadResult { bool installed = false; };
                 std::vector<DownloadResult> results(paints.size());
+                if (!paints.empty())
+                    ReportProgress([&](PaintProgress& progress) { progress.batchDone = 0; progress.batchTotal = paints.size(); });
                 std::atomic_size_t nextPaint{0};
                 const auto downloadWorker = [&]()
                 {
@@ -455,22 +484,40 @@ void PaintDownloader::Run()
                             break;
                         const auto& paint = paints[index];
                         if (!ShouldLoadPaint(paint.type, paintOptions_.load()))
+                        {
+                            ReportProgress([](PaintProgress& progress) { ++progress.batchDone; });
                             continue;
+                        }
                         if (logCallback_)
                             logCallback_(LogLevel::Verbose, "Downloading a " + std::string(PaintTypeName(paint.type)) +
                                 " paint for user " + std::to_string(paint.userId) +
                                 (paint.carPath.empty() ? std::string(".") : " in " + paint.carPath + "."));
                         std::string error;
+                        bool failed = false;
                         if (client.Download(paint.url, contents, error, stopping_))
                         {
                             if (logCallback_)
                                 logCallback_(LogLevel::Verbose, "Downloaded " + std::to_string(contents.size()) + " bytes.");
                             if (sessionGeneration_.load() == batchGeneration &&
                                 ShouldLoadPaint(paint.type, paintOptions_.load()))
+                            {
                                 results[index].installed = store_.Install(paint, contents, stopping_);
+                                failed = !results[index].installed && !stopping_.load();
+                            }
                         }
-                        else if (!stopping_.load() && logCallback_)
-                            logCallback_(LogLevel::Warning, "Paint download failed: " + error);
+                        else if (!stopping_.load())
+                        {
+                            failed = true;
+                            if (logCallback_)
+                                logCallback_(LogLevel::Warning, "Paint download failed: " + error);
+                        }
+                        if (sessionGeneration_.load() == batchGeneration)
+                            ReportProgress([&](PaintProgress& progress)
+                            {
+                                ++progress.batchDone;
+                                progress.installedFiles += results[index].installed;
+                                progress.failedFiles += failed;
+                            });
                     }
                 };
                 std::vector<std::thread> workers;
@@ -489,6 +536,8 @@ void PaintDownloader::Run()
                         logCallback_(LogLevel::Warning, "Could not start all download workers; continuing with fewer workers.");
                     downloadWorker();
                 }
+                if (!paints.empty() && sessionGeneration_.load() == batchGeneration)
+                    ReportProgress([](PaintProgress& progress) { progress.batchDone = 0; progress.batchTotal = 0; });
 
                 size_t installed = 0;
                 std::set<std::string> installedCars;
