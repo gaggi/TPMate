@@ -179,10 +179,9 @@ int TrayApp::Run(HINSTANCE instance)
     if (!RegisterClassExW(&wc)) return 1;
 
     CreateFonts();
-    const std::wstring title = L"TPMate " + UpdateChecker::CurrentVersion();
     RECT initialRect{0, 0, MulDiv(1000, dpi_, 96), MulDiv(680, dpi_, 96)};
     AdjustWindowRectExForDpi(&initialRect, kMainWindowStyle, FALSE, 0, dpi_);
-    window_ = CreateWindowExW(0, wc.lpszClassName, title.c_str(), kMainWindowStyle,
+    window_ = CreateWindowExW(0, wc.lpszClassName, L"TPMate", kMainWindowStyle,
         CW_USEDEFAULT, CW_USEDEFAULT, initialRect.right - initialRect.left, initialRect.bottom - initialRect.top,
         nullptr, nullptr, instance_, this);
     if (!window_) return 1;
@@ -526,8 +525,8 @@ void TrayApp::AddTrayIcon()
     iconData_.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP; iconData_.uCallbackMessage = kTrayMessage;
     iconData_.hIcon = static_cast<HICON>(LoadImageW(instance_, MAKEINTRESOURCEW(IDI_APPICON), IMAGE_ICON,
         GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_SHARED));
-    // The tooltip only names the app; the window's banner shows the state.
-    wcsncpy_s(iconData_.szTip, (L"TPMate " + UpdateChecker::CurrentVersion()).c_str(), _TRUNCATE);
+    // The tooltip only names the app; the window's banner shows the state, the sidebar the version.
+    wcscpy_s(iconData_.szTip, L"TPMate");
     Shell_NotifyIconW(NIM_ADD, &iconData_); iconData_.uVersion = NOTIFYICON_VERSION_4; Shell_NotifyIconW(NIM_SETVERSION, &iconData_);
 }
 void TrayApp::RemoveTrayIcon() { Shell_NotifyIconW(NIM_DELETE, &iconData_); }
