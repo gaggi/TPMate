@@ -54,7 +54,7 @@ target_compile_definitions(TPMate PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_A
 target_compile_definitions(TPMate PRIVATE TPMATE_VERSION="${TPMATE_VERSION}"
     TPMATE_VERSION_MAJOR=${TPMATE_VERSION_MAJOR} TPMATE_VERSION_MINOR=${TPMATE_VERSION_MINOR}
     TPMATE_VERSION_PATCH=${TPMATE_VERSION_PATCH})
-target_link_libraries(TPMate PRIVATE comctl32 uxtheme gdi32 shell32 winhttp xmllite ole32 oleaut32 advapi32 taskschd bzip2)
+target_link_libraries(TPMate PRIVATE comctl32 uxtheme gdi32 shell32 winhttp bcrypt xmllite ole32 oleaut32 advapi32 taskschd bzip2)
 
 add_executable(TPMateUpdateTests EXCLUDE_FROM_ALL tests/UpdateCheckerTests.cpp src/JsonLite.cpp)
 add_executable(TPMateReloadTests EXCLUDE_FROM_ALL tests/ReloadShortcutTests.cpp)
@@ -82,7 +82,7 @@ target_include_directories(TPMateUpdateTests PRIVATE src)
 # The update tests compare against fixed release tags, so they always run as version 0.1.0,
 # whatever version a release build passes in.
 target_compile_definitions(TPMateUpdateTests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN TPMATE_VERSION="0.1.0")
-target_link_libraries(TPMateUpdateTests PRIVATE shell32 winhttp)
+target_link_libraries(TPMateUpdateTests PRIVATE shell32 winhttp bcrypt)
 
 if(MSVC)
     # Sources stay ASCII (escapes for other characters); /utf-8 avoids the system code page.
