@@ -193,5 +193,5 @@ namespace
 
 HWND CreatePaintsPage(const PageContext& context, HWND parent)
 {
-    return PageWindow::Show(std::make_unique<PaintsPage>(context), context.instance, parent, 520, 560);
+    return PageWindow::Show(std::make_unique<PaintsPage>(context), context.instance, parent, 520, 360);
 }

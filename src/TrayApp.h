@@ -105,5 +105,6 @@ private:
     // While the clean-up question is open, page switches wait: the page that asked must
     // outlive the message box, which keeps tray commands running.
     bool cleanQuestionOpen_ = false;
+    bool forwardingWheel_ = false;
     std::optional<Page> pendingPage_;
 };

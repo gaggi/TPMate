@@ -5,6 +5,7 @@
 
 #include <shellapi.h>
 #include <shlobj.h>
+#include <windowsx.h>
 #include <richedit.h>
 #include <commctrl.h>
 
@@ -488,6 +489,23 @@ LRESULT TrayApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
             RefreshPage(); // Restored from the taskbar after updates were skipped.
         }
         return 0;
+    case WM_MOUSEWHEEL:
+    {
+        // Windows set to send the wheel to the focused window delivers it here after a click on
+        // the sidebar; pass it to the list or page under the cursor. Children that do not scroll
+        // hand it back up through DefWindowProc, which the flag stops from looping.
+        if (forwardingWheel_) return 0;
+        const POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+        const HWND target = WindowFromPoint(point);
+        if (target && target != window_ && IsChild(window_, target))
+        {
+            forwardingWheel_ = true;
+            SendMessageW(target, WM_MOUSEWHEEL, wParam, lParam);
+            forwardingWheel_ = false;
+            return 0;
+        }
+        break;
+    }
     case WM_GETMINMAXINFO:
     {
         RECT minimum{0, 0, MulDiv(kMinimumWidth, dpi_, 96), MulDiv(kMinimumHeight, dpi_, 96)};
