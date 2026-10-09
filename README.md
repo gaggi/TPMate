@@ -50,15 +50,18 @@ This creates both release builds in the regular `build` directory:
 
 ## GitHub releases
 
-Use version tags such as `v0.1.0`. Attach standalone executable assets named
-`TPMate-windows-x64.exe` and `TPMate-windows-x86.exe` (versioned names ending in
-`windows-x64.exe` / `windows-x86.exe` also work). If a newer release lacks a
-matching executable, the update dialog offers its GitHub page. Drafts and
-prereleases are excluded by GitHub's latest-release endpoint. No published release
-yet is shown as no update available; network and API failures are reported.
+Releases are built by GitHub Actions (`.github/workflows/release.yml`):
 
-Before releasing a new version, update the CMake project version and the
-Windows VERSIONINFO in `resources/resources.rc` together.
+1. Set `TPMATE_VERSION_DEFAULT` in `CMakeLists.txt` to the new version (it also feeds
+   the exe's file version) and commit it.
+2. Tag that commit and push the tag, for example `git tag v0.2.0` and
+   `git push origin v0.2.0`.
+
+The workflow checks that the tag matches `TPMATE_VERSION_DEFAULT`, builds x64 and
+x86, runs the tests and publishes a release with `TPMate-vX.Y.Z-windows-x64.exe`,
+`TPMate-vX.Y.Z-windows-x86.exe`, a zip of each and SHA-256 checksums. The update
+check picks the exe whose name ends in `windows-x64.exe` / `windows-x86.exe`.
+Drafts and prereleases are excluded by GitHub's latest-release endpoint.
 
 The update tests can be built as the `TPMateUpdateTests` target and run directly;
 they verify version comparisons and release metadata for each architecture offline.

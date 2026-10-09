@@ -1,5 +1,17 @@
 cmake_minimum_required(VERSION 3.21)
-project(TPMate VERSION 0.1.0 LANGUAGES C CXX RC)
+project(TPMate LANGUAGES C CXX RC)
+
+# The one place for the version. The release workflow checks that a "vX.Y.Z" tag matches
+# it and passes the tag's version in as TPMATE_VERSION.
+set(TPMATE_VERSION_DEFAULT "0.1.0")
+set(TPMATE_VERSION "${TPMATE_VERSION_DEFAULT}" CACHE STRING "TPMate version")
+if(NOT TPMATE_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+([-.+][0-9A-Za-z.-]+)?$")
+    message(FATAL_ERROR "Invalid TPMATE_VERSION: '${TPMATE_VERSION}'")
+endif()
+string(REGEX MATCH "^([0-9]+)\\.([0-9]+)\\.([0-9]+)" TPMATE_VERSION_NUMBERS "${TPMATE_VERSION}")
+set(TPMATE_VERSION_MAJOR ${CMAKE_MATCH_1})
+set(TPMATE_VERSION_MINOR ${CMAKE_MATCH_2})
+set(TPMATE_VERSION_PATCH ${CMAKE_MATCH_3})
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -38,7 +50,10 @@ add_executable(TPMate WIN32
 
 target_include_directories(TPMate PRIVATE src)
 target_compile_definitions(TPMate PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
-target_compile_definitions(TPMate PRIVATE TPMATE_VERSION="${PROJECT_VERSION}")
+# Also reach resources/resources.rc, which builds VERSIONINFO from them.
+target_compile_definitions(TPMate PRIVATE TPMATE_VERSION="${TPMATE_VERSION}"
+    TPMATE_VERSION_MAJOR=${TPMATE_VERSION_MAJOR} TPMATE_VERSION_MINOR=${TPMATE_VERSION_MINOR}
+    TPMATE_VERSION_PATCH=${TPMATE_VERSION_PATCH})
 target_link_libraries(TPMate PRIVATE comctl32 uxtheme gdi32 shell32 winhttp xmllite ole32 oleaut32 advapi32 taskschd bzip2)
 
 add_executable(TPMateUpdateTests EXCLUDE_FROM_ALL tests/UpdateCheckerTests.cpp src/JsonLite.cpp)
@@ -52,7 +67,9 @@ target_compile_definitions(TPMatePresenceTests PRIVATE UNICODE _UNICODE NOMINMAX
 target_include_directories(TPMateReloadTests PRIVATE src)
 target_compile_definitions(TPMateReloadTests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_include_directories(TPMateUpdateTests PRIVATE src)
-target_compile_definitions(TPMateUpdateTests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN TPMATE_VERSION="${PROJECT_VERSION}")
+# The update tests compare against fixed release tags, so they always run as version 0.1.0,
+# whatever version a release build passes in.
+target_compile_definitions(TPMateUpdateTests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN TPMATE_VERSION="0.1.0")
 target_link_libraries(TPMateUpdateTests PRIVATE shell32 winhttp)
 
 if(MSVC)
