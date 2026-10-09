@@ -34,7 +34,6 @@ namespace
     constexpr int kReloadTexturesMessage = 7;
     constexpr UINT kMenuOpen = 1001;
     constexpr UINT kMenuClean = 1003;
-    constexpr UINT kMenuUpdate = 1005;
     constexpr UINT kMenuExit = 1004;
     constexpr UINT kMenuRefresh = 1006;
     constexpr UINT kMenuOpenFolder = 1007;
@@ -426,11 +425,6 @@ LRESULT TrayApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
             OpenPaintFolder();
             if (!openFolderMessage_.empty()) { ShowStatusWindow(); ShowPage(Page::Session); }
             return 0;
-        case kMenuUpdate:
-            ShowStatusWindow();
-            ShowPage(Page::Settings);
-            StartUpdateCheck(false);
-            return 0;
         case kMenuClean:
             // The result shows on the Session page.
             ShowStatusWindow();
@@ -546,8 +540,6 @@ void TrayApp::ShowMenu()
     AppendMenuW(menu, MF_STRING, kMenuOpenFolder, L"Open paint folder");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kMenuClean, L"Clean iRacing Paints Folder...");
-    const bool updateBusy = update_.phase == UpdateState::Phase::Checking || update_.phase == UpdateState::Phase::Downloading;
-    AppendMenuW(menu, MF_STRING | (updateBusy ? MF_GRAYED : 0), kMenuUpdate, L"Check for updates...");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr); AppendMenuW(menu, MF_STRING, kMenuExit, L"Exit");
     SetMenuDefaultItem(menu, kMenuOpen, FALSE);
     POINT point{}; GetCursorPos(&point); SetForegroundWindow(window_);
