@@ -37,6 +37,10 @@ void MarkDriversChecking(std::vector<DriverStatus>& list, const std::vector<Sess
 // except drivers whose lookup failed.
 void StartDriverDownloads(std::vector<DriverStatus>& list, const std::vector<SessionDriver>& drivers,
     const std::vector<PaintFile>& paints, const std::vector<int>& failedUsers = {});
+// Already processed drivers that get more paints (a newly enabled paint type) download
+// them without losing their counts.
+void ContinueDriverDownloads(std::vector<DriverStatus>& list, const std::vector<SessionDriver>& drivers,
+    const std::vector<PaintFile>& paints);
 void RecordPaintResult(std::vector<DriverStatus>& list, const PaintFile& paint, bool installed, bool failed);
 // The batch ended; downloading drivers become Installed, Failed or NoPaint.
 void FinishDriverDownloads(std::vector<DriverStatus>& list);

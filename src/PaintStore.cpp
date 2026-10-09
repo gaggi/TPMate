@@ -267,7 +267,8 @@ bool PaintStore::AppendManifestLocked(const std::wstring& destination)
     return ok;
 }
 
-bool PaintStore::Decompress(const std::vector<unsigned char>& input, std::vector<unsigned char>& output)
+bool PaintStore::DecompressBzip2(const std::vector<unsigned char>& input, std::vector<unsigned char>& output,
+    const std::atomic_bool& stopping)
 {
     if (input.empty() || input.size() > (std::numeric_limits<unsigned int>::max)())
         return false;
@@ -280,7 +281,8 @@ bool PaintStore::Decompress(const std::vector<unsigned char>& input, std::vector
     output.resize((std::min)(kMaxUncompressedBytes, (std::max)(input.size() * 4, static_cast<size_t>(256 * 1024))));
     size_t produced = 0;
     int result = BZ_OK;
-    while (result == BZ_OK)
+    bool complete = false;
+    while (result == BZ_OK && !stopping.load())
     {
         if (produced == output.size())
         {
@@ -293,11 +295,18 @@ bool PaintStore::Decompress(const std::vector<unsigned char>& input, std::vector
         }
         stream.next_out = reinterpret_cast<char*>(output.data() + produced);
         stream.avail_out = static_cast<unsigned int>(output.size() - produced);
+        const unsigned int inputBefore = stream.avail_in;
+        const size_t producedBefore = produced;
         result = BZ2_bzDecompress(&stream);
         produced = output.size() - stream.avail_out;
+        complete = result == BZ_STREAM_END;
+        // With the input used up before the end of the stream, bzip2 keeps answering BZ_OK
+        // without consuming or producing anything: the file was truncated.
+        if (result == BZ_OK && stream.avail_in == inputBefore && produced == producedBefore)
+            break;
     }
     BZ2_bzDecompressEnd(&stream);
-    output.resize(result == BZ_STREAM_END ? produced : 0);
+    output.resize(complete ? produced : 0);
     return !output.empty();
 }
 
@@ -319,9 +328,10 @@ bool PaintStore::Install(const PaintFile& paint, const std::vector<unsigned char
     if (EndsWithBz2(paint.url))
     {
         Log(LogLevel::Verbose, "Decompressing " + paint.carPath + " paint for user " + std::to_string(paint.userId) + ".");
-        if (!Decompress(contents, unpacked))
+        if (!DecompressBzip2(contents, unpacked, stopping))
         {
-            Log(LogLevel::Error, "Could not decompress a Trading Paints file.");
+            if (!stopping.load())
+                Log(LogLevel::Error, "Could not decompress a Trading Paints file; it is damaged or incomplete.");
             return false;
         }
         output = &unpacked;
@@ -364,6 +374,14 @@ bool PaintStore::Install(const PaintFile& paint, const std::vector<unsigned char
     Log(LogLevel::Info, "Installed " + WideToUtf8(std::filesystem::path(destination).filename().wstring()) +
         " for " + (paint.carPath.empty() ? std::string("driver") : paint.carPath) + ".");
     return true;
+}
+
+void PaintStore::ForgetDownloadedPaints()
+{
+    std::lock_guard lock(mutex_);
+    managedFiles_.clear();
+    if (!SaveManifestLocked())
+        Log(LogLevel::Warning, "Could not update the saved paint cleanup list.");
 }
 
 bool PaintStore::DeleteDownloadedPaints()

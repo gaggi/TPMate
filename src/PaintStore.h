@@ -17,9 +17,14 @@ public:
     bool Install(const PaintFile& paint, const std::vector<unsigned char>& compressedContents,
         const std::atomic_bool& stopping);
     bool DeleteDownloadedPaints();
+    // Stops tracking the downloaded paints without deleting them, e.g. because the
+    // whole paint folder goes to the Recycle Bin next.
+    void ForgetDownloadedPaints();
+    // Returns false for damaged or truncated data, an oversized result, or when stopping.
+    static bool DecompressBzip2(const std::vector<unsigned char>& input, std::vector<unsigned char>& output,
+        const std::atomic_bool& stopping);
 
 private:
-    bool Decompress(const std::vector<unsigned char>& input, std::vector<unsigned char>& output);
     std::wstring DestinationPath(const PaintFile& paint) const;
     std::wstring StateDirectory() const;
     std::wstring ManifestPath() const;

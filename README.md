@@ -29,6 +29,9 @@ A small native Windows tray application for iRacing Trading Paints. TPMate is wr
 - Reloads all car textures after the initial download and only affected cars after later downloads
 - Reports installed paints in one reload summary, grouped as Cars, Suits, and Helmets; multiple car paint layers count as one car
 - Downloads overwrite existing paint files without creating backups or restoring previous files
+- A failed lookup, an incomplete or invalid Trading Paints answer, and a failed or truncated download are retried with the next session update, up to three attempts per driver and session; Refresh paints always tries again
+- Turning a paint type off downloads nothing; turning one on downloads only that type. Changing "Only drivers on track" only looks up drivers that were not processed yet
+- Clean iRacing Paints Folder sends TPMate's own downloads to the Recycle Bin too; while iRacing is connected, the session's paints are downloaded again afterwards
 - Optional cleanup deletes downloaded paint files when iRacing exits
 - Download workers install each paint immediately instead of retaining the entire batch in RAM; at most two paints are unpacked/installed concurrently, and each install appends one line to the cleanup list instead of rewriting it
 - HTTP requests share a WinHTTP session and read response bodies in 64 KB blocks

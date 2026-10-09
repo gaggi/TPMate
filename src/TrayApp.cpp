@@ -87,14 +87,16 @@ namespace
     }
 
     // Asks first; returns what happened, or nullopt when the user said no.
-    std::optional<std::wstring> CleanIRacingPaints(HWND owner, PaintDownloader& downloader)
+    std::optional<std::wstring> CleanIRacingPaints(HWND owner, PaintDownloader& downloader, bool connected)
     {
-        const auto result = MessageBoxW(owner,
-            L"Move all .tga and .mip files in the iRacing paints folder to the Recycle Bin?",
+        const std::wstring question = std::wstring(L"Move all .tga and .mip files in the iRacing paints folder to the Recycle Bin?") +
+            (connected ? L"\n\nTPMate then downloads the paints of the current session again." : L"");
+        const auto result = MessageBoxW(owner, question.c_str(),
             L"Clean iRacing Paints Folder", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
         if (result != IDYES) return std::nullopt;
 
-        downloader.DeleteDownloadedPaints();
+        // TPMate's own downloads go to the Recycle Bin with everything else instead of being deleted.
+        downloader.ForgetDownloadedPaints();
         const auto root = PaintFolder();
         if (root.empty()) return L"The folder Documents\\iRacing\\paint does not exist.";
         std::error_code error;
@@ -349,12 +351,19 @@ void TrayApp::CleanPaintFolder()
 {
     if (cleanQuestionOpen_) return;
     cleanQuestionOpen_ = true;
-    const auto result = CleanIRacingPaints(window_, downloader_);
+    const auto result = CleanIRacingPaints(window_, downloader_, connected_);
     cleanQuestionOpen_ = false;
     if (result)
     {
         cleanFolderMessage_ = *result;
         PostLog(LogLevel::Info, "Clean iRacing paint folder: " + WideToUtf8(*result));
+        // The downloader still counts the session's paints as installed; fetch them again so
+        // the folder, the driver list and iRacing agree. It waits for a running batch first.
+        if (connected_)
+        {
+            downloader_.RequestRefresh();
+            cleanFolderMessage_ += L" Downloading the session's paints again.";
+        }
     }
     RefreshPage();
     if (pendingPage_) PostMessageW(window_, kShowPendingPage, 0, 0);
@@ -841,7 +850,15 @@ void TrayApp::UpdateStatusDisplay()
     StatusPanel::Tone tone = StatusPanel::Tone::Neutral;
     std::wstring title = L"Waiting for iRacing";
     std::wstring detail = L"Paints are downloaded when you join a session.";
-    if (connected_ && progress.batchTotal > 0)
+    const size_t checking = static_cast<size_t>(std::count_if(progress.drivers.begin(), progress.drivers.end(),
+        [](const DriverStatus& status) { return status.state == DriverPaintState::Checking; }));
+    if (connected_ && checking > 0 && progress.batchTotal == 0)
+    {
+        tone = StatusPanel::Tone::Busy;
+        title = L"Checking Trading Paints" + std::wstring(separator) + count(checking) + (checking == 1 ? L" driver" : L" drivers");
+        detail = session;
+    }
+    else if (connected_ && progress.batchTotal > 0)
     {
         tone = StatusPanel::Tone::Busy;
         title = L"Downloading paints" + std::wstring(separator) + count(progress.batchDone) + L" of " + count(progress.batchTotal);

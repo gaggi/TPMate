@@ -10,6 +10,7 @@
 #include <functional>
 #include <windows.h>
 #include <mutex>
+#include <map>
 #include <optional>
 #include <string>
 #include <thread>
@@ -50,6 +51,9 @@ public:
     void OnIRacingTextureReload();
     void RequestRefresh();
     bool DeleteDownloadedPaints();
+    void ForgetDownloadedPaints();
+    // Tests turn this off so they never ask a running iRacing (or TPMate) to reload textures.
+    void SetTextureReloadBroadcast(bool enabled);
 
 private:
     void Run();
@@ -65,6 +69,7 @@ private:
     std::atomic_uint maxConcurrentDownloads_{5};
     std::atomic_uint paintOptions_{31};
     std::atomic_bool onlyPresentDrivers_{true};
+    std::atomic_bool broadcastTextureReload_{true};
     std::mutex mutex_;
     std::condition_variable workAvailable_;
     std::atomic_uint sessionGeneration_{0};
@@ -73,6 +78,8 @@ private:
     bool presenceChanged_ = false;
     bool forceRefresh_ = false;
     bool optionsChanged_ = false;
+    // "Only drivers on track" changed: re-select drivers, but keep what is already installed.
+    bool selectionChanged_ = false;
     bool invalidateSession_ = false;
     HWND reloadExcludeWindow_ = nullptr;
     std::thread thread_;

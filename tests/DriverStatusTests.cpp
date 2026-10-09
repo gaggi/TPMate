@@ -86,6 +86,16 @@ int main()
         StartDriverDownloads(list, {roster.drivers[3]}, {}, {103});
         Require(Find(list, 103).state == DriverPaintState::Failed, "A failed lookup is not \"No paint\"");
 
+        // A newly enabled paint type continues an installed driver without resetting it.
+        ContinueDriverDownloads(list, {roster.drivers[1]}, {Paint(101, PaintType::Suit, "")});
+        Require(Find(list, 101).state == DriverPaintState::Downloading && Find(list, 101).installedFiles == 1,
+            "Continuing keeps the counts");
+        RecordPaintResult(list, Paint(101, PaintType::Suit, ""), true, false);
+        FinishDriverDownloads(list);
+        Require(Find(list, 101).state == DriverPaintState::Installed && Find(list, 101).installedFiles == 2, "Continued driver stays installed");
+        ContinueDriverDownloads(list, {roster.drivers[1]}, {Paint(999, PaintType::Suit, "")});
+        Require(Find(list, 101).state == DriverPaintState::Installed, "Drivers without new paints are left alone");
+
         SyncDriverList(list, roster, later, true);
         Require(Find(list, 101).state == DriverPaintState::NotOnTrack && Find(list, 100).state == DriverPaintState::Waiting,
             "A refresh starts every driver over");

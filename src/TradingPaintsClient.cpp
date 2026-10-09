@@ -152,9 +152,9 @@ namespace
 
         DWORD contentLength = 0;
         DWORD contentLengthSize = sizeof(contentLength);
-        if (WinHttpQueryHeaders(request, WINHTTP_QUERY_CONTENT_LENGTH | WINHTTP_QUERY_FLAG_NUMBER,
-            WINHTTP_HEADER_NAME_BY_INDEX, &contentLength, &contentLengthSize, WINHTTP_NO_HEADER_INDEX) &&
-            contentLength <= kMaximumResponseBytes)
+        const bool hasContentLength = WinHttpQueryHeaders(request, WINHTTP_QUERY_CONTENT_LENGTH | WINHTTP_QUERY_FLAG_NUMBER,
+            WINHTTP_HEADER_NAME_BY_INDEX, &contentLength, &contentLengthSize, WINHTTP_NO_HEADER_INDEX) != FALSE;
+        if (hasContentLength && contentLength <= kMaximumResponseBytes)
             response.reserve(contentLength);
         constexpr size_t readBlock = 64 * 1024;
         while (!stopping.load())
@@ -183,6 +183,13 @@ namespace
         if (stopping.load())
         {
             error = "Request cancelled.";
+            ok = false;
+        }
+        // A connection that closes early can still look like a normal end of the body.
+        if (ok && hasContentLength && response.size() != contentLength)
+        {
+            error = "The download ended early (" + std::to_string(response.size()) + " of " +
+                std::to_string(contentLength) + " bytes).";
             ok = false;
         }
 
@@ -317,7 +324,8 @@ namespace
 
         reader->Release();
         stream->Release();
-        return true;
+        // S_FALSE is the regular end of the document; anything else means truncated or broken XML.
+        return hr == S_FALSE;
     }
 
     std::wstring BuildUserUrl(int userId)
@@ -474,9 +482,15 @@ std::vector<PaintFile> TradingPaintsClient::FetchUserPaints(int userId, const st
             Log(LogLevel::Warning, "Could not fetch paints for user " + std::to_string(userId) + ": " + error);
         return {};
     }
-    auto paints = ParsePaintXml(response, userId);
-    if (paints.empty() && !response.empty())
-        Log(LogLevel::Warning, "Trading Paints returned invalid XML or no supported paints for user " + std::to_string(userId) + ".");
+    std::vector<PaintFile> paints;
+    if (!response.empty() && !ParsePaintXml(response, userId, paints))
+    {
+        failed = !stopping.load();
+        Log(LogLevel::Warning, "Trading Paints sent an incomplete or invalid answer for user " + std::to_string(userId) + ".");
+        return {};
+    }
+    if (paints.empty())
+        Log(LogLevel::Verbose, "Trading Paints has no paints for user " + std::to_string(userId) + ".");
     return paints;
 }
 
@@ -507,23 +521,32 @@ std::vector<PaintFile> TradingPaintsClient::FetchTeamPaints(const SessionInfo& s
             Log(LogLevel::Warning, "Could not fetch team paints: " + error);
         return {};
     }
-    auto paints = ParsePaintXml(response, 0);
-    if (paints.empty() && !response.empty())
-        Log(LogLevel::Warning, "Trading Paints returned invalid XML or no supported paints for the team session.");
+    std::vector<PaintFile> paints;
+    if (!response.empty() && !ParsePaintXml(response, 0, paints))
+    {
+        failed = !stopping.load();
+        Log(LogLevel::Warning, "Trading Paints sent an incomplete or invalid answer for the team session.");
+        return {};
+    }
+    if (paints.empty())
+        Log(LogLevel::Verbose, "Trading Paints has no paints for the team session.");
     return paints;
 }
 
-std::vector<PaintFile> TradingPaintsClient::ParsePaintXml(const std::vector<unsigned char>& xml, int fallbackUserId)
+bool TradingPaintsClient::ParsePaintXml(const std::vector<unsigned char>& xml, int fallbackUserId, std::vector<PaintFile>& paints)
 {
-    std::vector<PaintFile> paints;
+    paints.clear();
     if (!XmlToPaints(xml, fallbackUserId, paints))
-        return {};
+    {
+        paints.clear();
+        return false;
+    }
     paints.erase(std::remove_if(paints.begin(), paints.end(), [](const PaintFile& file)
     {
         return !file.hasValidType || file.url.empty() || file.url.rfind("https://", 0) != 0 ||
             (!IsWearable(file.type) && file.carPath.empty());
     }), paints.end());
-    return paints;
+    return true;
 }
 
 bool TradingPaintsClient::Download(const std::string& url, std::vector<unsigned char>& contents,

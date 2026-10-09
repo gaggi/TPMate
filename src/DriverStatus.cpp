@@ -100,6 +100,16 @@ void StartDriverDownloads(std::vector<DriverStatus>& list, const std::vector<Ses
     });
 }
 
+void ContinueDriverDownloads(std::vector<DriverStatus>& list, const std::vector<SessionDriver>& drivers,
+    const std::vector<PaintFile>& paints)
+{
+    ForDrivers(list, drivers, [&](DriverStatus& status)
+    {
+        if (std::any_of(paints.begin(), paints.end(), [&](const PaintFile& paint) { return PaintBelongsToDriver(paint, status.driver); }))
+            status.state = DriverPaintState::Downloading;
+    });
+}
+
 void RecordPaintResult(std::vector<DriverStatus>& list, const PaintFile& paint, bool installed, bool failed)
 {
     for (auto& status : list)

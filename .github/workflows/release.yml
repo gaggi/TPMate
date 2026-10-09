@@ -36,7 +36,7 @@ jobs:
           $version = "${{ github.ref_name }}".TrimStart('v')
           Write-Host "Building TPMate version $version (x64)"
           cmake --preset x64 "-DTPMATE_VERSION:STRING=$version"
-          cmake --build --preset release-x64 --target TPMate TPMateDriverStatusTests TPMatePresenceTests TPMateReloadTests TPMateUpdateTests
+          cmake --build --preset release-x64 --target TPMate TPMateDriverStatusTests TPMateDownloaderTests TPMatePaintStoreTests TPMateTradingPaintsTests TPMatePresenceTests TPMateReloadTests TPMateUpdateTests
 
       - name: Build x86
         shell: pwsh
@@ -44,14 +44,14 @@ jobs:
           $version = "${{ github.ref_name }}".TrimStart('v')
           Write-Host "Building TPMate version $version (x86)"
           cmake --preset x86 "-DTPMATE_VERSION:STRING=$version"
-          cmake --build --preset release-x86 --target TPMate TPMateDriverStatusTests TPMatePresenceTests TPMateReloadTests TPMateUpdateTests
+          cmake --build --preset release-x86 --target TPMate TPMateDriverStatusTests TPMateDownloaderTests TPMatePaintStoreTests TPMateTradingPaintsTests TPMatePresenceTests TPMateReloadTests TPMateUpdateTests
 
       # Nothing is published unless the tests pass for both builds.
       - name: Run tests
         shell: pwsh
         run: |
           foreach ($arch in 'x64', 'x86') {
-            foreach ($test in 'DriverStatus', 'Presence', 'Reload', 'Update') {
+            foreach ($test in 'DriverStatus', 'Downloader', 'PaintStore', 'TradingPaints', 'Presence', 'Reload', 'Update') {
               & ".\build\$arch\Release\TPMate${test}Tests.exe"
               if ($LASTEXITCODE -ne 0) { throw "TPMate${test}Tests ($arch) failed with exit code $LASTEXITCODE." }
             }

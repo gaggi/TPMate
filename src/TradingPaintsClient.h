@@ -43,7 +43,8 @@ public:
 private:
     std::vector<PaintFile> FetchUserPaints(int userId, const std::atomic_bool& stopping, bool& failed);
     std::vector<PaintFile> FetchTeamPaints(const SessionInfo& session, const std::atomic_bool& stopping, bool& failed);
-    std::vector<PaintFile> ParsePaintXml(const std::vector<unsigned char>& xml, int fallbackUserId);
+    // False when the answer is not complete, well-formed XML; true (possibly with no paints) otherwise.
+    bool ParsePaintXml(const std::vector<unsigned char>& xml, int fallbackUserId, std::vector<PaintFile>& paints);
     void Log(LogLevel level, const std::string& message) const;
 
     LogCallback logCallback_;
